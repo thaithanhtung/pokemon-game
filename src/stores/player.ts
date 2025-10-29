@@ -2,6 +2,8 @@ import { defineStore } from 'pinia';
 import { useFirebase } from '@/composables/useFirebase';
 import { usePokemonStore } from './pokemon';
 import type { Card, Deck } from '@/types';
+import type { Skill, SkillElement } from '@/types/skills';
+import { getSkillById, getSkillsByType } from '@/types/skills';
 
 interface CardRarity {
   name: string;
@@ -436,13 +438,10 @@ export const usePlayerStore = defineStore('player', {
 
     giveStarterPack() {
       const starterCards = [
-        'pokemon_1',
-        'pokemon_4',
-        'pokemon_7',
-        'pokemon_25',
         'skill_heal',
         'skill_heal',
         'skill_boost',
+        'skill_shield',
         'item_potion',
         'item_potion',
         'item_potion',
@@ -544,7 +543,8 @@ export const usePlayerStore = defineStore('player', {
         return;
       }
 
-      this.cardDatabase = pokemonStore.loadedPokemon
+      // Create cards with basic data first, then fetch full stats asynchronously
+      const basicCards = pokemonStore.loadedPokemon
         .slice(0, 1025)
         .map(pokemon => {
           if (!pokemon || !pokemon.id || !pokemon.name) {
@@ -553,6 +553,8 @@ export const usePlayerStore = defineStore('player', {
           }
 
           const rarity = this.determineRarity(pokemon.id);
+
+          // Use basic stats for now
           const stats = this.generateStats(pokemon, rarity);
 
           return {
@@ -575,6 +577,8 @@ export const usePlayerStore = defineStore('player', {
         })
         .filter(card => card !== null);
 
+      this.cardDatabase = basicCards;
+
       this.generateSkillCards();
       this.generateItemCards();
       console.log('PlayerStore: Card database generated:', this.cardDatabase.length, 'cards');
@@ -588,6 +592,38 @@ export const usePlayerStore = defineStore('player', {
     },
 
     generateStats(pokemon, rarity) {
+      // Use actual Pokemon stats from API if available
+      console.log('pokemon----->', pokemon.stats);
+      if (pokemon.stats && pokemon.stats.length > 0) {
+        // Pokemon stats order from API:
+        // 0: HP, 1: Attack, 2: Defense, 3: Special Attack, 4: Special Defense, 5: Speed
+        const hp = pokemon.stats.find(s => s.stat.name === 'hp')?.base_stat || 50;
+        const attack = pokemon.stats.find(s => s.stat.name === 'attack')?.base_stat || 50;
+        const defense = pokemon.stats.find(s => s.stat.name === 'defense')?.base_stat || 50;
+        const speed = pokemon.stats.find(s => s.stat.name === 'speed')?.base_stat || 50;
+
+        // Apply rarity multiplier to make rarer Pokemon stronger
+        const rarityMultipliers = {
+          C: 0.8, // Common: 80% of base stats
+          R: 1.0, // Rare: 100% of base stats
+          E: 1.2, // Epic: 120% of base stats
+          L: 1.4, // Legendary: 140% of base stats
+        };
+
+        const multiplier = rarityMultipliers[rarity] || 1.0;
+
+        // Add small random variance for uniqueness
+        const variance = () => Math.floor(Math.random() * 10) - 5;
+
+        return {
+          hp: Math.round(hp * multiplier) + variance(),
+          atk: Math.round(attack * multiplier) + variance(),
+          def: Math.round(defense * multiplier) + variance(),
+          spd: Math.round(speed * multiplier) + variance(),
+        };
+      }
+
+      // Fallback to hard-coded stats if API data not available
       const baseStats = {
         C: { hp: 40, atk: 30, def: 25, spd: 35 },
         R: { hp: 60, atk: 45, def: 40, spd: 50 },
@@ -607,51 +643,48 @@ export const usePlayerStore = defineStore('player', {
     },
 
     generatePokemonSkills(pokemon) {
-      const skills = [];
-      const types = pokemon.types;
+      const skills: Skill[] = [];
+      const types = (pokemon.types || []) as SkillElement[];
 
-      skills.push({
-        name: 'Tackle',
-        damage: 20,
-        energy: 1,
-        description: 'A basic physical attack',
-      });
+      // Always add Tackle as a basic move
+      const tackle = getSkillById('tackle');
+      if (tackle) skills.push({ ...tackle });
 
-      if (types.includes('fire')) {
-        skills.push({
-          name: 'Ember',
-          damage: 30,
-          energy: 2,
-          type: 'fire',
-          description: 'May inflict burn',
-        });
-      } else if (types.includes('water')) {
-        skills.push({
-          name: 'Water Gun',
-          damage: 30,
-          energy: 2,
-          type: 'water',
-          description: 'A stream of water',
-        });
-      } else if (types.includes('grass')) {
-        skills.push({
-          name: 'Vine Whip',
-          damage: 30,
-          energy: 2,
-          type: 'grass',
-          description: 'Strike with vines',
-        });
-      } else if (types.includes('electric')) {
-        skills.push({
-          name: 'Thunder Shock',
-          damage: 30,
-          energy: 2,
-          type: 'electric',
-          description: 'May cause paralysis',
-        });
+      // Add type-specific skills based on Pokemon's types
+      for (const type of types) {
+        const typeSkills = getSkillsByType(type);
+
+        // Add one basic and one advanced skill per type
+        const basicSkill = typeSkills.find(s => s.category !== 'ultimate' && s.energy <= 2);
+        const advancedSkill = typeSkills.find(
+          s => s.category !== 'ultimate' && s.energy > 2 && s.energy <= 4
+        );
+
+        if (basicSkill && !skills.some(s => s.id === basicSkill.id)) {
+          skills.push({ ...basicSkill });
+        }
+        if (advancedSkill && !skills.some(s => s.id === advancedSkill.id)) {
+          skills.push({ ...advancedSkill });
+        }
       }
 
-      return skills;
+      // If Pokemon is evolved (higher ID), add an ultimate skill
+      if (pokemon.id > 50) {
+        const ultimateType = types[0];
+        const typeSkills = getSkillsByType(ultimateType);
+        const ultimate = typeSkills.find(s => s.category === 'ultimate');
+        if (ultimate && !skills.some(s => s.id === ultimate.id)) {
+          skills.push({ ...ultimate });
+        }
+      }
+
+      // Ensure we have at least 2 skills
+      if (skills.length < 2) {
+        const quickAttack = getSkillById('quick_attack');
+        if (quickAttack) skills.push({ ...quickAttack });
+      }
+
+      return skills.slice(0, 4); // Max 4 skills
     },
 
     generateSkillCards() {

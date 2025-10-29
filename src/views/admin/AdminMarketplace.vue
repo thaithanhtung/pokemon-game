@@ -24,7 +24,32 @@
       </div>
 
       <div class="listings-grid">
-        <div v-for="listing in filteredListings" :key="listing.id" class="listing-card">
+        <!-- Loading Skeletons -->
+        <div v-if="isLoadingListings" v-for="n in 6" :key="`skeleton-${n}`" class="listing-card skeleton-card">
+          <div class="pokemon-info">
+            <div class="skeleton skeleton-badge"></div>
+            <div class="skeleton skeleton-image"></div>
+            <div class="skeleton skeleton-title"></div>
+            <div class="skeleton skeleton-id"></div>
+            <div class="types">
+              <div class="skeleton skeleton-type"></div>
+              <div class="skeleton skeleton-type"></div>
+            </div>
+          </div>
+          <div class="listing-details">
+            <div class="skeleton skeleton-text"></div>
+            <div class="skeleton skeleton-text"></div>
+            <div class="skeleton skeleton-text"></div>
+          </div>
+          <div class="listing-actions">
+            <div class="skeleton skeleton-button"></div>
+            <div class="skeleton skeleton-button"></div>
+            <div class="skeleton skeleton-button"></div>
+          </div>
+        </div>
+        
+        <!-- Actual Listings -->
+        <div v-else-if="!isLoadingListings && filteredListings.length > 0" v-for="listing in filteredListings" :key="listing.id" class="listing-card">
           <div class="pokemon-info">
             <div class="listing-category-badge" :class="`category-${listing.category}`">
               {{ formatCategory(listing.category) }}
@@ -72,6 +97,13 @@
               <span class="btn-text">Delete</span>
             </button>
           </div>
+        </div>
+        
+        <!-- Empty State -->
+        <div v-else-if="!isLoadingListings && filteredListings.length === 0" class="empty-state">
+          <i class="fas fa-store-slash"></i>
+          <h3>No listings found</h3>
+          <p>Try adjusting your filters or add new Pokemon to the market.</p>
         </div>
       </div>
     </div>
@@ -132,7 +164,25 @@
 
           <!-- Pokemon Grid -->
           <div class="pokemon-select-grid">
+            <!-- Loading Skeletons -->
             <div
+              v-if="isLoadingPokemon"
+              v-for="n in 12"
+              :key="`poke-skeleton-${n}`"
+              class="pokemon-select-card skeleton-card"
+            >
+              <div class="skeleton skeleton-badge-small"></div>
+              <div class="skeleton skeleton-image-small"></div>
+              <div class="skeleton skeleton-name-small"></div>
+              <div class="skeleton skeleton-types-small">
+                <div class="skeleton skeleton-type-small"></div>
+                <div class="skeleton skeleton-type-small"></div>
+              </div>
+            </div>
+            
+            <!-- Actual Pokemon -->
+            <div
+              v-else
               v-for="pokemon in filteredSpecialPokemon"
               :key="pokemon.uniqueId || pokemon.id"
               @click="selectPokemon(pokemon)"
@@ -300,6 +350,7 @@ const pokemonFilter = ref('all');
 // All special Pokemon data loaded
 const allSpecialPokemon = ref([]);
 const isLoadingPokemon = ref(false);
+const isLoadingListings = ref(true);
 
 const newListing = ref({
   price: null,
@@ -388,89 +439,105 @@ const loadAllSpecialPokemon = async () => {
   if (allSpecialPokemon.value.length > 0 || isLoadingPokemon.value) return;
 
   isLoadingPokemon.value = true;
+  
+  // Clear the array to start fresh
+  allSpecialPokemon.value = [];
+  
   try {
-    const loadedPokemon = [];
-
     // Load legendary and mythical Pokemon
-    for (const pokemonData of legendaryPokemon) {
-      try {
-        const pokemon = await pokeAPI.getPokemonByName(pokemonData.id);
-        loadedPokemon.push({
-          id: pokemon.id,
-          name: pokemon.name,
-          sprite:
-            pokemon.sprites.other['official-artwork'].front_default ||
-            pokemon.sprites.other.home.front_default ||
-            pokemon.sprites.front_default,
-          types: pokemon.types.map(t => t.type.name),
-          category: pokemonData.category,
-        });
-      } catch (error) {
-        console.error(`Failed to load ${pokemonData.name}:`, error);
+    const loadLegendaryPokemon = async () => {
+      for (const pokemonData of legendaryPokemon) {
+        try {
+          const pokemon = await pokeAPI.getPokemonByName(pokemonData.id);
+          // Add Pokemon immediately as it loads
+          allSpecialPokemon.value.push({
+            id: pokemon.id,
+            name: pokemon.name,
+            sprite:
+              pokemon.sprites.other['official-artwork'].front_default ||
+              pokemon.sprites.other.home.front_default ||
+              pokemon.sprites.front_default,
+            types: pokemon.types.map(t => t.type.name),
+            category: pokemonData.category,
+          });
+        } catch (error) {
+          console.error(`Failed to load ${pokemonData.name}:`, error);
+        }
       }
-    }
+    };
 
     // Load mega Pokemon using their base forms
-    for (const megaData of megaPokemon) {
-      try {
-        // For mega Pokemon, try to get the mega form data first
-        let pokemonData;
-        let megaSprite;
-        
-        // Always use base form for data, but try to get mega sprite
-        pokemonData = await pokeAPI.getPokemonByName(megaData.baseId);
-        
-        // Construct sprite URL for mega forms
-        // First try the specific mega form sprite
-        const megaSpriteId = megaData.id;
-        megaSprite = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${megaSpriteId}.png`;
-        
-        // Create a promise to check if the mega sprite exists
-        const checkMegaSprite = new Promise((resolve) => {
-          const img = new Image();
-          img.onload = () => resolve(megaSprite);
-          img.onerror = () => {
-            // Try official artwork
-            const officialArtwork = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${megaSpriteId}.png`;
-            const img2 = new Image();
-            img2.onload = () => resolve(officialArtwork);
-            img2.onerror = () => {
-              // Fallback to base sprite
-              resolve(pokemonData.sprites.other['official-artwork'].front_default ||
-                     pokemonData.sprites.other.home.front_default ||
-                     pokemonData.sprites.front_default);
+    const loadMegaPokemon = async () => {
+      for (const megaData of megaPokemon) {
+        try {
+          // For mega Pokemon, try to get the mega form data first
+          let pokemonData;
+          let megaSprite;
+          
+          // Always use base form for data, but try to get mega sprite
+          pokemonData = await pokeAPI.getPokemonByName(megaData.baseId);
+          
+          // Construct sprite URL for mega forms
+          // First try the specific mega form sprite
+          const megaSpriteId = megaData.id;
+          megaSprite = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${megaSpriteId}.png`;
+          
+          // Create a promise to check if the mega sprite exists
+          const checkMegaSprite = new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve(megaSprite);
+            img.onerror = () => {
+              // Try official artwork
+              const officialArtwork = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${megaSpriteId}.png`;
+              const img2 = new Image();
+              img2.onload = () => resolve(officialArtwork);
+              img2.onerror = () => {
+                // Fallback to base sprite
+                resolve(pokemonData.sprites.other['official-artwork'].front_default ||
+                       pokemonData.sprites.other.home.front_default ||
+                       pokemonData.sprites.front_default);
+              };
+              img2.src = officialArtwork;
             };
-            img2.src = officialArtwork;
-          };
-          img.src = megaSprite;
-        });
-        
-        megaSprite = await checkMegaSprite;
-        
-        loadedPokemon.push({
-          id: megaData.id, // Use unique mega ID to prevent conflicts
-          uniqueId: `${megaData.category}_${megaData.id}`, // Unique identifier
-          pokemonId: megaData.baseId, // Base Pokemon ID for data
-          megaId: megaData.id, // Store mega ID separately
-          name: megaData.name,
-          displayName: formatPokemonName(megaData.name), // Format for display
-          sprite: megaSprite,
-          types: pokemonData.types.map(t => t.type.name),
-          category: megaData.category,
-          baseId: megaData.baseId,
-        });
-      } catch (error) {
-        console.error(`Failed to load ${megaData.name}:`, error);
+            img.src = megaSprite;
+          });
+          
+          megaSprite = await checkMegaSprite;
+          
+          // Add Pokemon immediately as it loads
+          allSpecialPokemon.value.push({
+            id: megaData.id, // Use unique mega ID to prevent conflicts
+            uniqueId: `${megaData.category}_${megaData.id}`, // Unique identifier
+            pokemonId: megaData.baseId, // Base Pokemon ID for data
+            megaId: megaData.id, // Store mega ID separately
+            name: megaData.name,
+            displayName: formatPokemonName(megaData.name), // Format for display
+            sprite: megaSprite,
+            types: pokemonData.types.map(t => t.type.name),
+            category: megaData.category,
+            baseId: megaData.baseId,
+          });
+        } catch (error) {
+          console.error(`Failed to load ${megaData.name}:`, error);
+        }
       }
-    }
+    };
 
-    allSpecialPokemon.value = loadedPokemon;
-    console.log('Loaded special Pokemon:', loadedPokemon.length);
+    // Load all Pokemon types concurrently but display progressively
+    await Promise.all([
+      loadLegendaryPokemon(),
+      loadMegaPokemon()
+    ]);
+    
+    console.log('Loaded special Pokemon:', allSpecialPokemon.value.length);
   } catch (error) {
     console.error('Error loading special Pokemon:', error);
     showToast('Failed to load Pokemon data', 'error');
   } finally {
-    isLoadingPokemon.value = false;
+    // Keep loading indicator until at least some Pokemon are loaded
+    setTimeout(() => {
+      isLoadingPokemon.value = false;
+    }, 500);
   }
 };
 
@@ -564,8 +631,8 @@ const deleteListing = async listing => {
       const modal = document.createElement('div');
       modal.className = 'delete-confirm-modal';
       modal.innerHTML = `
-        <div class="delete-confirm-overlay" onclick="this.parentElement.remove(); resolve(false)">
-          <div class="delete-confirm-content" onclick="event.stopPropagation()">
+        <div class="delete-confirm-overlay">
+          <div class="delete-confirm-content">
             <div class="delete-confirm-icon">
               <i class="fas fa-exclamation-triangle"></i>
             </div>
@@ -573,10 +640,10 @@ const deleteListing = async listing => {
             <p>Are you sure you want to delete <strong>${formatPokemonName(listing.name)}</strong> from the market?</p>
             <p class="delete-confirm-warning">This action cannot be undone.</p>
             <div class="delete-confirm-actions">
-              <button class="btn-cancel-delete" onclick="this.closest('.delete-confirm-modal').remove(); resolve(false)">
+              <button class="btn-cancel-delete">
                 <i class="fas fa-times"></i> Cancel
               </button>
-              <button class="btn-confirm-delete" onclick="this.closest('.delete-confirm-modal').remove(); resolve(true)">
+              <button class="btn-confirm-delete">
                 <i class="fas fa-trash-alt"></i> Delete
               </button>
             </div>
@@ -701,6 +768,40 @@ const deleteListing = async listing => {
       document.head.appendChild(style);
       document.body.appendChild(modal);
       
+      // Add event listeners
+      const overlay = modal.querySelector('.delete-confirm-overlay');
+      const content = modal.querySelector('.delete-confirm-content');
+      const cancelBtn = modal.querySelector('.btn-cancel-delete');
+      const confirmBtn = modal.querySelector('.btn-confirm-delete');
+      
+      // Click overlay to close
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          modal.remove();
+          style.remove();
+          resolve(false);
+        }
+      });
+      
+      // Prevent content clicks from closing
+      content.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+      
+      // Cancel button
+      cancelBtn.addEventListener('click', () => {
+        modal.remove();
+        style.remove();
+        resolve(false);
+      });
+      
+      // Confirm button
+      confirmBtn.addEventListener('click', () => {
+        modal.remove();
+        style.remove();
+        resolve(true);
+      });
+      
       // Clean up style when modal is removed
       modal.addEventListener('DOMNodeRemoved', () => {
         style.remove();
@@ -723,10 +824,13 @@ const deleteListing = async listing => {
 
 const loadListings = async () => {
   try {
+    isLoadingListings.value = true;
     listings.value = await marketService.getMarketListings();
   } catch (error) {
     console.error('Error loading listings:', error);
     showToast('Failed to load market listings', 'error');
+  } finally {
+    isLoadingListings.value = false;
   }
 };
 
@@ -1545,5 +1649,145 @@ onMounted(() => {
 .pokemon-select-card.selected:has(.category-mega) {
   border-color: #ff0080;
   background: linear-gradient(135deg, rgba(255, 0, 128, 0.2) 0%, rgba(0, 128, 255, 0.2) 100%);
+}
+
+/* Skeleton Loading Styles */
+.skeleton-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton {
+  background: #e0e0e0;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.6),
+    transparent
+  );
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* Skeleton sizes for listing cards */
+.skeleton-badge {
+  width: 100px;
+  height: 24px;
+  margin: 0 auto 10px;
+}
+
+.skeleton-image {
+  width: 180px;
+  height: 180px;
+  margin: 10px auto;
+}
+
+.skeleton-title {
+  width: 150px;
+  height: 24px;
+  margin: 10px auto;
+}
+
+.skeleton-id {
+  width: 60px;
+  height: 16px;
+  margin: 5px auto;
+}
+
+.skeleton-type {
+  width: 60px;
+  height: 24px;
+  display: inline-block;
+  margin: 5px;
+  border-radius: 12px;
+}
+
+.skeleton-text {
+  width: 100%;
+  height: 20px;
+  margin: 8px 0;
+}
+
+.skeleton-button {
+  flex: 1;
+  height: 36px;
+  border-radius: 8px;
+}
+
+/* Skeleton sizes for Pokemon selection grid */
+.skeleton-badge-small {
+  width: 80px;
+  height: 20px;
+  margin: 0 auto 8px;
+}
+
+.skeleton-image-small {
+  width: 150px;
+  height: 150px;
+  margin: 8px auto;
+}
+
+.skeleton-name-small {
+  width: 120px;
+  height: 20px;
+  margin: 8px auto;
+}
+
+.skeleton-types-small {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.skeleton-type-small {
+  width: 50px;
+  height: 20px;
+  border-radius: 10px;
+}
+
+/* Empty state */
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 60px 20px;
+  color: #666;
+}
+
+.empty-state i {
+  font-size: 4rem;
+  color: #ccc;
+  margin-bottom: 20px;
+}
+
+.empty-state h3 {
+  font-size: 1.5rem;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.empty-state p {
+  font-size: 1rem;
+  color: #666;
 }
 </style>

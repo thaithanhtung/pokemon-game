@@ -25,7 +25,7 @@ export const navigationGroups = {
   cardClash: {
     title: 'Card Clash',
     icon: '⚔️',
-    routes: ['card-clash-menu', 'card-clash-collection', 'card-clash-deck-builder', 'card-clash-shop', 'card-clash-tournament', 'card-clash-trading']
+    routes: ['card-clash-menu', 'card-clash-collection', 'card-clash-deck-builder', 'card-clash-shop', 'card-clash-tournament', 'card-clash-trading', 'card-clash-battle-3d-demo']
   },
   admin: {
     title: 'Admin',
@@ -36,7 +36,7 @@ export const navigationGroups = {
   other: {
     title: 'Other',
     icon: '📚',
-    routes: ['game-tutorial', 'effects-showcase', 'babylon-card-demo']
+    routes: ['game-tutorial', 'effects-showcase', 'babylon-card-demo', 'sound-demo']
   }
 };
 
@@ -112,6 +112,28 @@ const routes: RouteRecordRaw[] = [
           }
         },
         {
+          path: 'battle-3d/:mode',
+          name: 'card-clash-battle-3d',
+          component: () => import('@/components/battle3d/BattleArena3D.vue'),
+          props: true,
+          meta: {
+            title: '3D Battle',
+            icon: '🎮',
+            showInNav: false
+          }
+        },
+        {
+          path: 'battle-3d/demo',
+          name: 'card-clash-battle-3d-demo-alt',
+          component: () => import('@/views/card-clash/Battle3DDemo.vue'),
+          meta: {
+            title: 'Battle 3D Demo',
+            icon: '🎮',
+            description: '3D battle with sound effects',
+            showInNav: false
+          }
+        },
+        {
           path: 'deck-builder',
           name: 'card-clash-deck-builder',
           component: () => import('@/views/card-clash/DeckBuilder.vue'),
@@ -163,6 +185,17 @@ const routes: RouteRecordRaw[] = [
             title: 'Trading',
             icon: '🏪',
             description: 'Trade cards',
+            showInNav: true
+          }
+        },
+        {
+          path: 'battle-3d-demo',
+          name: 'card-clash-battle-3d-demo',
+          component: () => import('@/views/card-clash/Battle3DDemo.vue'),
+          meta: {
+            title: 'Battle 3D Demo',
+            icon: '🎮',
+            description: '3D battle with sound effects',
             showInNav: true
           }
         },
@@ -247,6 +280,17 @@ const routes: RouteRecordRaw[] = [
         title: 'Babylon Card Demo',
         icon: '🎨',
         description: '3D card animations with Babylon.js',
+        showInNav: true
+      }
+    },
+    {
+      path: '/sound-demo',
+      name: 'sound-demo',
+      component: () => import('@/views/SoundDemo.vue'),
+      meta: {
+        title: 'Sound Demo',
+        icon: '🔊',
+        description: 'Test game sound effects',
         showInNav: true
       }
     },

@@ -15,7 +15,7 @@
     ]"
     :data-element="card && card.anim ? card.anim.element : null"
     :data-anim="card && card.anim ? card.anim.type : null"
-    @click="$emit('click', card)"
+    @click="handleCardClick"
   >
     <!-- Card Background -->
     <div :class="['absolute inset-0 rounded-lg shadow-lg', rarityBackground]"></div>
@@ -32,9 +32,7 @@
     <!-- Card Content -->
     <div class="relative z-10 h-full flex flex-col">
       <!-- Card Header -->
-      <div
-        class="px-2 py-1 flex flex-col bg-black/20 backdrop-blur-sm relative"
-      >
+      <div class="px-2 py-1 flex flex-col bg-black/20 backdrop-blur-sm relative">
         <div class="flex justify-between items-center">
           <span class="font-bold text-xs text-white drop-shadow-lg">
             {{ card.name }}
@@ -44,20 +42,24 @@
           }}</span>
         </div>
         <div v-if="card.type === 'pokemon'" class="text-center">
-          <span :class="[
-            'text-xs font-bold',
-            card.level && card.level > 1 ? 'text-yellow-400' : 'text-gray-400'
-          ]">
+          <span
+            :class="[
+              'text-xs font-bold',
+              card.level && card.level > 1 ? 'text-yellow-400' : 'text-gray-400',
+            ]"
+          >
             Lv.{{ card.level || 1 }}
           </span>
         </div>
-        
+
         <!-- Mega Pokemon Badge -->
         <div
           v-if="isMegaPokemon"
           class="absolute -top-3 left-1/2 transform -translate-x-1/2 mega-badge"
         >
-          <span class="mega-badge-rainbow text-xs font-bold text-white px-3 py-1 rounded-full shadow-lg">
+          <span
+            class="mega-badge-rainbow text-xs font-bold text-white px-3 py-1 rounded-full shadow-lg"
+          >
             MEGA
           </span>
         </div>
@@ -152,6 +154,9 @@
 <script setup>
 import { computed } from 'vue';
 import { getTypeColor as pokeTypeColor } from '@/services/pokeapi';
+import { useSound } from '@/composables/useSound';
+
+const sound = useSound();
 
 const props = defineProps({
   card: {
@@ -175,12 +180,21 @@ const props = defineProps({
 
 // Check if this is a mega Pokemon
 const isMegaPokemon = computed(() => {
-  return props.card.name?.toLowerCase().includes('mega') || 
-         props.card.category === 'mega' ||
-         (props.card.pokemonId >= 10001 && props.card.pokemonId <= 10500); // Mega Pokemon ID range
+  return (
+    props.card.name?.toLowerCase().includes('mega') ||
+    props.card.category === 'mega' ||
+    (props.card.pokemonId >= 10001 && props.card.pokemonId <= 10500)
+  ); // Mega Pokemon ID range
 });
 
-defineEmits(['click']);
+const emit = defineEmits(['click']);
+
+const handleCardClick = () => {
+  if (!props.disabled) {
+    sound.playCardFlip();
+    emit('click', props.card);
+  }
+};
 
 const sizeClasses = computed(() => {
   const sizes = {
@@ -196,7 +210,7 @@ const rarityBackground = computed(() => {
   if (isMegaPokemon.value) {
     return 'mega-rainbow-gradient';
   }
-  
+
   const backgrounds = {
     C: 'bg-gradient-to-br from-gray-600 via-gray-700 to-gray-900',
     R: 'bg-gradient-to-br from-blue-600 via-blue-700 to-blue-900',
@@ -221,7 +235,7 @@ const rarityGlowClass = computed(() => {
   if (isMegaPokemon.value) {
     return 'shadow-[0_0_35px_rgba(236,72,153,0.9)]';
   }
-  
+
   const glows = {
     C: 'shadow-[0_0_15px_rgba(156,163,175,0.3)]',
     R: 'shadow-[0_0_20px_rgba(59,130,246,0.5)]',
@@ -835,7 +849,7 @@ const getTypeColor = type => {
   overflow: visible;
 }
 
-.mega-pokemon-card::before {
+/* .mega-pokemon-card::before {
   content: '';
   position: absolute;
   inset: -3px;
@@ -855,7 +869,7 @@ const getTypeColor = type => {
   animation: rainbow-shift 3s ease infinite;
   opacity: 0.9;
   z-index: -1;
-}
+} */
 
 .mega-pokemon-card:hover::before {
   opacity: 1;
@@ -914,17 +928,14 @@ const getTypeColor = type => {
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(255, 255, 255, 0.3) 0%,
-    transparent 50%
-  );
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.3) 0%, transparent 50%);
   mix-blend-mode: overlay;
   animation: mega-pulse 2s ease-in-out infinite;
 }
 
 @keyframes mega-pulse {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(0.8);
     opacity: 0.3;
   }
@@ -968,7 +979,8 @@ const getTypeColor = type => {
 }
 
 @keyframes badge-float {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateX(-50%) translateY(0);
   }
   50% {
@@ -1001,11 +1013,15 @@ const getTypeColor = type => {
   width: 100%;
   height: 100%;
   transform: translate(-50%, -50%);
-  background-image: 
+  background-image:
     radial-gradient(circle, rgba(236, 72, 153, 0.8) 1px, transparent 1px),
     radial-gradient(circle, rgba(147, 51, 234, 0.8) 1px, transparent 1px);
-  background-size: 50px 50px, 30px 30px;
-  background-position: 0 0, 25px 25px;
+  background-size:
+    50px 50px,
+    30px 30px;
+  background-position:
+    0 0,
+    25px 25px;
   animation: mega-particles 20s linear infinite;
   opacity: 0.1;
   pointer-events: none;

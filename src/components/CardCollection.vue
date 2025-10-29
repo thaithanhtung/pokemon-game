@@ -339,6 +339,70 @@
                   <span class="text-white">{{ formatDate(selectedCard.obtainedAt) }}</span>
                 </div>
               </div>
+              
+              <!-- Pokemon Stats -->
+              <div class="mt-3 pt-3 border-t border-gray-600">
+                <h4 class="font-semibold text-white mb-2">
+                  <i class="fas fa-chart-bar mr-2"></i>Base Stats
+                  <span class="text-xs text-blue-400 ml-2" title="Stats are fetched from PokeAPI">
+                    <i class="fas fa-info-circle"></i> From API
+                  </span>
+                </h4>
+                <div class="space-y-1">
+                  <div class="flex justify-between items-center">
+                    <span class="text-gray-400 text-xs">HP</span>
+                    <div class="flex items-center gap-2">
+                      <div class="w-32 bg-gray-700 rounded-full h-2">
+                        <div 
+                          class="bg-red-500 h-2 rounded-full" 
+                          :style="{width: `${Math.min((selectedCard.hp / 255) * 100, 100)}%`}"
+                        ></div>
+                      </div>
+                      <span class="text-white text-xs w-8 text-right">{{ selectedCard.hp }}</span>
+                    </div>
+                  </div>
+                  <div class="flex justify-between items-center">
+                    <span class="text-gray-400 text-xs">ATK</span>
+                    <div class="flex items-center gap-2">
+                      <div class="w-32 bg-gray-700 rounded-full h-2">
+                        <div 
+                          class="bg-orange-500 h-2 rounded-full" 
+                          :style="{width: `${Math.min((selectedCard.atk / 255) * 100, 100)}%`}"
+                        ></div>
+                      </div>
+                      <span class="text-white text-xs w-8 text-right">{{ selectedCard.atk }}</span>
+                    </div>
+                  </div>
+                  <div class="flex justify-between items-center">
+                    <span class="text-gray-400 text-xs">DEF</span>
+                    <div class="flex items-center gap-2">
+                      <div class="w-32 bg-gray-700 rounded-full h-2">
+                        <div 
+                          class="bg-yellow-500 h-2 rounded-full" 
+                          :style="{width: `${Math.min((selectedCard.def / 255) * 100, 100)}%`}"
+                        ></div>
+                      </div>
+                      <span class="text-white text-xs w-8 text-right">{{ selectedCard.def }}</span>
+                    </div>
+                  </div>
+                  <div class="flex justify-between items-center">
+                    <span class="text-gray-400 text-xs">SPD</span>
+                    <div class="flex items-center gap-2">
+                      <div class="w-32 bg-gray-700 rounded-full h-2">
+                        <div 
+                          class="bg-blue-500 h-2 rounded-full" 
+                          :style="{width: `${Math.min((selectedCard.spd / 255) * 100, 100)}%`}"
+                        ></div>
+                      </div>
+                      <span class="text-white text-xs w-8 text-right">{{ selectedCard.spd }}</span>
+                    </div>
+                  </div>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">
+                  <i class="fas fa-info-circle mr-1"></i>
+                  Stats based on official Pokemon data with {{ getRarityName(selectedCard.rarity) }} multiplier
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -351,11 +415,13 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useCardBattleStore } from '@/stores/cardBattle';
 import { usePlayerStore } from '@/stores/player';
+import { useToast } from '@/composables/useToast';
 import BattleCard from '@/components/BattleCard.vue';
 
 defineEmits(['back']);
 
 const playerStore = usePlayerStore();
+const { showToast } = useToast();
 
 const filterType = ref('all');
 const filterRarity = ref('all');
@@ -559,10 +625,12 @@ const toggleMergeSelection = card => {
   if (index > -1) {
     // Remove from selection
     selectedForMerge.value.splice(index, 1);
+    showToast(`${card.name} removed from merge selection`, 'info');
   } else {
     // Check if we can add this card
     if (selectedForMerge.value.length >= 3) {
-      return; // Already have 3 cards selected
+      showToast('Already selected 3 cards for merging!', 'warning');
+      return;
     }
 
     // Check if this card matches the others (same pokemon ID and level)
@@ -573,12 +641,19 @@ const toggleMergeSelection = card => {
 
       if (card.pokemonId !== firstCard.pokemonId || cardLevel !== firstCardLevel) {
         // Different pokemon or different level
+        showToast(`Can only merge identical Pokemon of the same level!`, 'warning');
         return;
       }
     }
 
     // Add to selection
     selectedForMerge.value.push(card);
+    
+    if (selectedForMerge.value.length === 3) {
+      showToast('3 cards selected! Click "Merge Cards" to proceed.', 'success');
+    } else {
+      showToast(`${card.name} selected (${selectedForMerge.value.length}/3)`, 'info');
+    }
   }
 };
 
@@ -598,7 +673,7 @@ const performMerge = async () => {
   const currentLevel = baseCard.level || 1;
 
   if (currentLevel >= 9) {
-    alert('Maximum level reached!');
+    showToast('Maximum level reached! Cannot merge Level 9 cards.', 'warning');
     return;
   }
 
@@ -662,11 +737,17 @@ const performMerge = async () => {
     selectedForMerge.value = [];
     showMergeMode.value = false;
 
-    // Show success message
-    alert(`Successfully merged into ${mergedCard.name} Level ${newLevel}!`);
+    // Show success message with detailed stats
+    const statsMessage = `HP: ${mergedCard.hp} | ATK: ${mergedCard.atk} | DEF: ${mergedCard.def} | SPD: ${mergedCard.spd}`;
+    showToast(`🎉 Successfully merged into ${mergedCard.name} Level ${newLevel}!`, 'success');
+    
+    // Show additional notification with stats after a short delay
+    setTimeout(() => {
+      showToast(`New stats: ${statsMessage}`, 'info');
+    }, 500);
   } catch (error) {
     console.error('Error merging cards:', error);
-    alert('Failed to merge cards. Please try again.');
+    showToast('Failed to merge cards. Please try again.', 'error');
 
     // Rollback on error
     cardsToMerge.forEach(card => {
@@ -685,8 +766,20 @@ const performMerge = async () => {
 
 // Clear merge selection when exiting merge mode
 watch(showMergeMode, newValue => {
-  if (!newValue) {
-    selectedForMerge.value = [];
+  if (newValue) {
+    // Entering merge mode
+    if (mergeableCardsCount.value === 0) {
+      showToast('No mergeable cards found. You need 3+ identical Pokemon cards.', 'warning');
+      showMergeMode.value = false;
+    } else {
+      showToast(`Merge mode activated! Found ${mergeableCardsCount.value} mergeable card types.`, 'info');
+    }
+  } else {
+    // Exiting merge mode
+    if (selectedForMerge.value.length > 0) {
+      selectedForMerge.value = [];
+      showToast('Merge mode deactivated. Selection cleared.', 'info');
+    }
   }
 });
 </script>

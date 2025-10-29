@@ -2,6 +2,7 @@
 import { useRoute } from 'vue-router';
 import AppNavigation from '@/components/AppNavigation.vue';
 import AppBreadcrumb from '@/components/AppBreadcrumb.vue';
+import SoundSettings from '@/components/SoundSettings.vue';
 
 const route = useRoute();
 </script>
@@ -108,6 +109,9 @@ const route = useRoute();
     </div>
 
     <router-view />
+    
+    <!-- Sound Settings -->
+    <SoundSettings />
   </div>
 </template>
 

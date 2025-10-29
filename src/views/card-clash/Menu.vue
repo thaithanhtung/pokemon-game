@@ -245,6 +245,34 @@
             </div>
           </div>
         </router-link>
+
+        <!-- 3D Battle Mode -->
+        <router-link
+          to="/card-clash/battle-3d/demo"
+          class="group relative bg-white rounded-2xl p-8 border-2 border-pink-200 hover:border-pink-400 transition-all duration-300 hover:scale-105 hover:shadow-2xl hover:shadow-pink-200/50"
+        >
+          <div
+            class="absolute inset-0 bg-gradient-to-br from-pink-100/50 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+          ></div>
+          <div
+            class="absolute -top-4 -right-4 w-24 h-24 bg-pink-300/30 rounded-full blur-2xl group-hover:scale-110 transition-transform duration-300"
+          ></div>
+          <div class="relative text-center text-gray-800">
+            <div
+              class="text-6xl mb-6 transform group-hover:scale-110 transition-transform duration-300 animate-pulse"
+              style="animation-delay: 1.4s"
+            >
+              🎮
+            </div>
+            <h3 class="text-2xl font-bold mb-3 text-pink-700">3D Battle Arena</h3>
+            <p class="text-sm text-pink-600 mb-4">Experience battles in stunning 3D!</p>
+            <div
+              class="inline-block bg-pink-100 px-4 py-2 rounded-lg border border-pink-300"
+            >
+              <span class="text-xs text-pink-700 font-medium">NEW! 🔥</span>
+            </div>
+          </div>
+        </router-link>
       </div>
     </div>
 

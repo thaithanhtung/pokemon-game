@@ -16,13 +16,14 @@
     "format:check": "prettier --check \"src/**/*.{js,vue,ts,css,json}\""
   },
   "dependencies": {
-    "@babylonjs/core": "^8.32.2",
-    "@babylonjs/gui": "^8.32.2",
-    "@babylonjs/loaders": "^8.32.2",
-    "@babylonjs/materials": "^8.32.2",
+    "@babylonjs/core": "^8.33.2",
+    "@babylonjs/gui": "^8.33.2",
+    "@babylonjs/loaders": "^8.33.2",
+    "@babylonjs/materials": "^8.33.2",
     "@motionone/vue": "^10.16.4",
     "axios": "^1.12.2",
     "firebase": "^12.4.0",
+    "howler": "^2.2.4",
     "lottie-web": "^5.13.0",
     "pinia": "^3.0.3",
     "vue": "^3.5.22",

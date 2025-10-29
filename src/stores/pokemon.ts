@@ -101,6 +101,10 @@ export const usePokemonStore = defineStore('pokemon', {
                     data.sprites.other.home.front_default ||
                     data.sprites.front_default,
                   generation: getGenerationFromId(data.id),
+                  stats: data.stats, // Include stats data
+                  abilities: data.abilities,
+                  height: data.height,
+                  weight: data.weight,
                 };
               } catch (err) {
                 console.error(`Failed to load ${pokemon.name}:`, err);

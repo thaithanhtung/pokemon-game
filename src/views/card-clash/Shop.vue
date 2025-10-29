@@ -90,7 +90,7 @@
             <p class="text-sm text-blue-600 mb-2">5 Random Cards</p>
             <p class="text-xs text-blue-700 mb-6 font-bold bg-blue-100 inline-block px-3 py-1 rounded-full">⭐ 1 Rare+ Guaranteed</p>
             <button
-              @click="buyPack('basic')"
+              @click="sound.playButtonClick(); buyPack('basic')"
               class="bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white px-6 py-3 rounded-lg font-bold shadow-lg transform transition-all duration-300 hover:scale-105 hover:shadow-blue-500/50"
             >
               <span class="flex items-center justify-center gap-2 text-lg">
@@ -123,7 +123,7 @@
             <p class="text-sm text-purple-600 mb-2">8 Random Cards</p>
             <p class="text-xs text-purple-700 mb-6 font-bold bg-purple-100 inline-block px-3 py-1 rounded-full">⭐ 2 Epic+ Guaranteed</p>
             <button
-              @click="buyPack('premium')"
+              @click="sound.playButtonClick(); buyPack('premium')"
               class="bg-gradient-to-r from-purple-600 to-pink-500 hover:from-purple-700 hover:to-pink-600 text-white px-6 py-3 rounded-lg font-bold shadow-lg transform transition-all duration-300 hover:scale-105 hover:shadow-purple-500/50"
             >
               <span class="flex items-center justify-center gap-2 text-lg">
@@ -156,7 +156,7 @@
             <p class="text-sm text-yellow-600 mb-2">10 Random Cards</p>
             <p class="text-xs text-yellow-700 mb-6 font-bold bg-yellow-100 inline-block px-3 py-1 rounded-full">⭐ 1 Legendary Guaranteed</p>
             <button
-              @click="buyPack('legendary')"
+              @click="sound.playButtonClick(); buyPack('legendary')"
               class="bg-gradient-to-r from-yellow-600 to-amber-500 hover:from-yellow-700 hover:to-amber-600 text-white px-6 py-3 rounded-lg font-bold shadow-lg transform transition-all duration-300 hover:scale-105 hover:shadow-yellow-500/50"
             >
               <span class="flex items-center justify-center gap-2 text-lg">
@@ -221,6 +221,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useCardBattleStore } from '@/stores/cardBattle';
 import { usePlayerStore } from '@/stores/player';
 import { useToast } from '@/composables/useToast';
+import { useSound } from '@/composables/useSound';
 import BattleCard from '@/components/BattleCard.vue';
 import { useFirebase } from '@/composables/useFirebase';
 
@@ -228,6 +229,7 @@ const firebase = useFirebase();
 
 const cardBattleStore = useCardBattleStore();
 const playerStore = usePlayerStore();
+const sound = useSound();
 const packStats = ref({
   totalPacks: 0,
   basicPacks: 0,
@@ -289,6 +291,9 @@ const buyPack = async type => {
   const pack = packInfo[type];
 
   if (playerStore.player?.[pack.currency] >= pack.cost) {
+    // Play purchase sound
+    sound.playPurchase();
+    
     currentPackType.value = type;
     packEmoji.value = pack.emoji;
     showPackOpening.value = true;
@@ -298,14 +303,43 @@ const buyPack = async type => {
 
     toast.success('Pack Purchased!', `Opened ${pack.name}`);
 
+    // Play pack opening sequence (shuffle and open sounds)
+    await sound.playPackOpenSequence(type);
+
     // Reload pack stats after opening
     await loadPackStats();
 
     setTimeout(() => {
       openedCards.value = cards;
+      
+      // Find the highest rarity card
+      const rarityOrder = { 'L': 4, 'E': 3, 'R': 2, 'C': 1 };
+      const highestRarityCard = cards.reduce((highest, card) => {
+        const currentRarity = rarityOrder[card.rarity] || 0;
+        const highestRarity = rarityOrder[highest.rarity] || 0;
+        return currentRarity > highestRarity ? card : highest;
+      }, cards[0]);
+      
+      // Play sound only for the highest rarity card
+      if (highestRarityCard.rarity === 'L') {
+        sound.play('legendary-reveal');
+        setTimeout(() => {
+          sound.playSuccess();
+        }, 800);
+      } else if (highestRarityCard.rarity === 'E') {
+        sound.play('legendary-reveal', 0.8); // Slightly quieter for epic
+        setTimeout(() => {
+          sound.playSuccess();
+        }, 800);
+      } else if (highestRarityCard.rarity === 'R') {
+        sound.play('card-reveal');
+      } else {
+        sound.play('card-flip', 0.6); // Quieter for common cards
+      }
     }, 1000);
   } else {
     const currencyName = pack.currency === 'energy' ? 'Energy' : 'Gems';
+    sound.playError();
     toast.error('Insufficient Funds', `Not enough ${currencyName}!`);
   }
 };

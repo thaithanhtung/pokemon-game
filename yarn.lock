@@ -345,38 +345,38 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babylonjs/core@npm:^8.32.2":
-  version: 8.32.2
-  resolution: "@babylonjs/core@npm:8.32.2"
-  checksum: 10c0/8c2167fe69e99a011b718147100377bf0ad79dff16858cdd127188dc79e74bee8e2cf8481722ff730dca11c193b6748e1bec002dbbb92be068c1a545442cca2a
+"@babylonjs/core@npm:^8.33.2":
+  version: 8.33.2
+  resolution: "@babylonjs/core@npm:8.33.2"
+  checksum: 10c0/ecdb628a80ac293d9beba426885b0bdfdf2aa3994ba7c09b3e023bc56e3761b3cd2bb5cc9b2c75b26223ed70916a79b68e04b9de09b202dab8ce9908f61f6ea3
   languageName: node
   linkType: hard
 
-"@babylonjs/gui@npm:^8.32.2":
-  version: 8.32.2
-  resolution: "@babylonjs/gui@npm:8.32.2"
+"@babylonjs/gui@npm:^8.33.2":
+  version: 8.33.2
+  resolution: "@babylonjs/gui@npm:8.33.2"
   peerDependencies:
     "@babylonjs/core": ^8.0.0
-  checksum: 10c0/942cd4187a5e73c8551a143fccd975a3323cf3f68e407eaf5186c40c07e482de1c6128400a418e59deb691dc62091e9be9c3df0e592beebed91f616c13d1ee56
+  checksum: 10c0/3170e94d86da5a79d0b7eb76ad281d2fa307b606e066f044b1c7eeab585d1eab68220aeabe6ad21f0503e13ee31329d28392a7a58e17d3881de8f3db49a39ccf
   languageName: node
   linkType: hard
 
-"@babylonjs/loaders@npm:^8.32.2":
-  version: 8.32.2
-  resolution: "@babylonjs/loaders@npm:8.32.2"
+"@babylonjs/loaders@npm:^8.33.2":
+  version: 8.33.2
+  resolution: "@babylonjs/loaders@npm:8.33.2"
   peerDependencies:
     "@babylonjs/core": ^8.0.0
     babylonjs-gltf2interface: ^8.0.0
-  checksum: 10c0/05567ea740179826b08b9dcf5ec2ba039333da32b1234d80cdd24bde3e40cde81bb7fd0355331b726ac854d243daf7c7bc25d354f88deb685c967727b81c026a
+  checksum: 10c0/7c60df9199343ae97d80d3b3cd6701dc6da9af38225205aa6cbee2bb9a9f72cc42be11ac201130b55d38cbe26af1d119d7d135058d65f16bd29675f9f3e62d57
   languageName: node
   linkType: hard
 
-"@babylonjs/materials@npm:^8.32.2":
-  version: 8.32.2
-  resolution: "@babylonjs/materials@npm:8.32.2"
+"@babylonjs/materials@npm:^8.33.2":
+  version: 8.33.2
+  resolution: "@babylonjs/materials@npm:8.33.2"
   peerDependencies:
     "@babylonjs/core": ^8.6.0
-  checksum: 10c0/b06af5b74689b7e835025bd448aa62bdaef1e968d9fead08629bbf858f54161c231d2468aeb023d6a1ce88a7856b509039b62ca70f6c76a5a5e0465b9cbdbced
+  checksum: 10c0/e965a9d0187a08988fc7de3ac5b5977ca55c86c14ac3c6c2639cd581c5a76ace72637a6db0cd3d43a8eb1cd260ae65e329b983d823b862ef60a24a4c6b421f66
   languageName: node
   linkType: hard
 
@@ -2906,6 +2906,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"howler@npm:^2.2.4":
+  version: 2.2.4
+  resolution: "howler@npm:2.2.4"
+  checksum: 10c0/74a295f56fd9b2abce122b27ed12c33fa195fb8a76832803e92d8e462a1eca803b55f44c14db052211d0cfab85c7c5249664c68d95bbbc16c775fac73866c6ef
+  languageName: node
+  linkType: hard
+
 "http-cache-semantics@npm:^4.1.1":
   version: 4.2.0
   resolution: "http-cache-semantics@npm:4.2.0"
@@ -4255,10 +4262,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "vue-project@workspace:."
   dependencies:
-    "@babylonjs/core": "npm:^8.32.2"
-    "@babylonjs/gui": "npm:^8.32.2"
-    "@babylonjs/loaders": "npm:^8.32.2"
-    "@babylonjs/materials": "npm:^8.32.2"
+    "@babylonjs/core": "npm:^8.33.2"
+    "@babylonjs/gui": "npm:^8.33.2"
+    "@babylonjs/loaders": "npm:^8.33.2"
+    "@babylonjs/materials": "npm:^8.33.2"
     "@motionone/vue": "npm:^10.16.4"
     "@tailwindcss/postcss": "npm:^4.1.14"
     "@types/node": "npm:^24.9.1"
@@ -4267,6 +4274,7 @@ __metadata:
     autoprefixer: "npm:^10.4.21"
     axios: "npm:^1.12.2"
     firebase: "npm:^12.4.0"
+    howler: "npm:^2.2.4"
     lottie-web: "npm:^5.13.0"
     pinia: "npm:^3.0.3"
     postcss: "npm:^8.5.6"
