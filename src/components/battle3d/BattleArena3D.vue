@@ -40,9 +40,18 @@
           :current-energy="currentEnergy"
           :max-energy="maxEnergy"
           :is-player-turn="isPlayerTurn"
-          :last-used-skill="lastUsedSkill"
           @use-skill="executeSkill"
         />
+        <!-- Switch Pokemon Button -->
+        <button 
+          v-if="hasBenchPokemon"
+          @click="$emit('request-switch')"
+          class="switch-pokemon-btn"
+          :disabled="!canSwitch"
+        >
+          <i class="fas fa-exchange-alt"></i>
+          Switch Pokemon
+        </button>
       </div>
 
       <!-- Battle Log -->
@@ -55,6 +64,11 @@
       <!-- Settings Button -->
       <button class="settings-btn" @click="showSettings = !showSettings">
         <i class="fas fa-cog"></i>
+      </button>
+      
+      <!-- Debug Button -->
+      <button class="debug-btn" @click="debugSkills" style="position: absolute; top: 60px; right: 10px; background: red; color: white; padding: 5px 10px; border-radius: 5px;">
+        Debug Skills
       </button>
     </div>
 
@@ -93,20 +107,18 @@
             <div class="result-glow"></div>
             <div class="result-particles"></div>
           </div>
-          
+
           <h1 class="result-text">
             {{ battleResult === 'victory' ? 'VICTORY!' : 'DEFEAT' }}
           </h1>
-          
+
           <div class="result-details">
             <p v-if="battleResult === 'victory'">
               Congratulations! You have defeated your opponent!
             </p>
-            <p v-else>
-              Your Pokemon has fainted. Better luck next time!
-            </p>
+            <p v-else>Your Pokemon has fainted. Better luck next time!</p>
           </div>
-          
+
           <div class="result-rewards" v-if="battleResult === 'victory'">
             <div class="reward-item">
               <i class="fas fa-coins"></i>
@@ -117,14 +129,12 @@
               <span>+100 XP</span>
             </div>
           </div>
-          
+
           <div class="result-actions">
             <button @click="$emit('battle-end', battleResult)" class="result-button primary">
               Continue
             </button>
-            <button @click="restartBattle" class="result-button secondary">
-              Battle Again
-            </button>
+            <button @click="restartBattle" class="result-button secondary">Battle Again</button>
           </div>
         </div>
       </div>
@@ -133,7 +143,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import * as BABYLON from '@babylonjs/core';
 import '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/defaultRenderingPipeline';
 import { BattleCamera3D } from './BattleCamera3D';
@@ -141,7 +151,7 @@ import { Pokemon3DModel } from './Pokemon3DModel';
 import { useBattle3DStore } from '@/stores/battle3D';
 import { useCardBattleStore } from '@/stores/cardBattle';
 import SkillManager from '@/components/battle/SkillManager.vue';
-import { SKILL_DATABASE, calculateDamage, getEffectivenessText, TYPE_EFFECTIVENESS, getSkillsByType } from '@/types/skills';
+import { SKILL_DATABASE, getSkillsByType } from '@/types/skills';
 import type { Skill, SkillElement } from '@/types/skills';
 import { soundService } from '@/services/soundService';
 
@@ -162,76 +172,239 @@ const emit = defineEmits<{
   'pokemon-faint': [data: any];
   'battle-end': [result: 'victory' | 'defeat'];
   'skill-executed': [skill: any];
+  'request-switch': [];
 }>();
 
 const babylonCanvas = ref<HTMLCanvasElement | null>(null);
 const battle3DStore = useBattle3DStore();
 const cardBattleStore = useCardBattleStore();
 
-// Battle state
-const playerHP = ref(100);
-const playerMaxHP = ref(100);
-const opponentHP = ref(100);
-const opponentMaxHP = ref(100);
-const currentEnergy = ref(3);
+// Get battle data from store - this is the source of truth
+const currentBattle = computed(() => cardBattleStore.currentBattle);
+const battleLog = computed(() => cardBattleStore.battleLog);
+
+// Computed battle state from store
+const playerHP = computed(() => currentBattle.value?.player?.activePokemon?.hp || 100);
+const playerMaxHP = computed(() => currentBattle.value?.player?.activePokemon?.maxHp || 100);
+const opponentHP = computed(() => currentBattle.value?.opponent?.activePokemon?.hp || 100);
+const opponentMaxHP = computed(() => currentBattle.value?.opponent?.activePokemon?.maxHp || 100);
+const currentEnergy = computed(() => currentBattle.value?.player?.energy || 3);
 const maxEnergy = ref(5);
-const isPlayerTurn = ref(true);
+const isPlayerTurn = computed(
+  () => currentBattle.value?.currentTurn === 'player' && !currentBattle.value?.ended
+);
+
+// Switch Pokemon computed properties
+const hasBenchPokemon = computed(() => 
+  currentBattle.value?.player?.bench?.length > 0
+);
+
+const canSwitch = computed(() => 
+  isPlayerTurn.value && 
+  !currentBattle.value?.requiresSwitch && 
+  currentBattle.value?.player?.activePokemon?.hp > 0
+);
+
+// UI state
 const selectedSkill = ref<Skill | null>(null);
-const lastUsedSkill = ref<string>('');
 const battleLogs = ref<BattleLog[]>([]);
-const comboCount = ref(0);
-const turnCount = ref(0);
-
-// Pokemon stats
-const playerStats = ref({
-  atk: 50,
-  def: 40,
-  spd: 60,
-  type: 'electric' as SkillElement
-});
-
-const opponentStats = ref({
-  atk: 55,
-  def: 45,
-  spd: 45,
-  type: 'fire' as SkillElement
-});
-
-// Settings
 const showSettings = ref(false);
 const qualityLevel = ref(battle3DStore.performanceLevel);
 const audioEnabled = ref(battle3DStore.audioEnabled);
 const effectsEnabled = ref(battle3DStore.effectsEnabled);
-
-// Battle result state
 const battleResult = ref<'victory' | 'defeat' | null>(null);
 
-// Player skills - using the new skill system
-const playerSkills = ref<Skill[]>([
-  { ...SKILL_DATABASE.find(s => s.id === 'thunder_shock')! },
-  { ...SKILL_DATABASE.find(s => s.id === 'thunderbolt')! },
-  { ...SKILL_DATABASE.find(s => s.id === 'quick_attack')! },
-  { ...SKILL_DATABASE.find(s => s.id === 'tackle')! },
-].map(skill => ({ ...skill, currentCooldown: 0 })));
+// Player skills from active Pokemon
+const playerSkills = computed(() => {
+  const activePokemon = currentBattle.value?.player?.activePokemon;
+  console.log('BattleArena3D - Computing playerSkills for:', activePokemon?.name);
+  console.log('  - Raw skills array:', activePokemon?.skills);
+  console.log('  - Skills is array?', Array.isArray(activePokemon?.skills));
+  console.log('  - Skills length:', activePokemon?.skills?.length);
+  
+  if (activePokemon?.skills && Array.isArray(activePokemon.skills) && activePokemon.skills.length > 0) {
+    const mappedSkills = activePokemon.skills.map(skill => ({
+      ...skill,
+      currentCooldown: skill.currentCooldown || 0,
+      // Ensure required properties exist
+      energy: skill.energy || 1,
+      power: skill.power || skill.damage || 50,
+      accuracy: skill.accuracy || 100,
+      effects: skill.effects || [],
+      // Add damage property if missing (for compatibility)
+      damage: skill.damage || skill.power || 50
+    }));
+    console.log('  - Mapped skills:', mappedSkills);
+    console.log('  - Mapped skills count:', mappedSkills.length);
+    console.log('  - Mapped skills details:', JSON.stringify(mappedSkills, null, 2));
+    return mappedSkills;
+  }
+  console.log('  - Returning empty skills array');
+  return [];
+});
 
 // Babylon.js references
 let engine: BABYLON.Engine;
 let scene: BABYLON.Scene;
 let cameraSystem: BattleCamera3D;
-let playerPokemon: Pokemon3DModel;
-let opponentPokemon: Pokemon3DModel;
+let playerPokemonModel: Pokemon3DModel;
+let opponentPokemonModel: Pokemon3DModel;
 let defaultPipeline: BABYLON.DefaultRenderingPipeline;
 
 // Computed properties
 const playerHPPercentage = computed(() => (playerHP.value / playerMaxHP.value) * 100);
 const opponentHPPercentage = computed(() => (opponentHP.value / opponentMaxHP.value) * 100);
 
+// Watch for battle end
+watch(
+  () => currentBattle.value?.ended,
+  ended => {
+    if (ended && currentBattle.value?.result) {
+      const playerWon = currentBattle.value.result === 'victory';
+      handleBattleEnd(playerWon);
+    }
+  }
+);
+
+// Watch for Pokemon switching - reload 3D models
+watch(
+  () => currentBattle.value?.player?.activePokemon?.uid,
+  async (newUid, oldUid) => {
+    if (newUid && oldUid && newUid !== oldUid && playerPokemonModel) {
+      const pokemon = currentBattle.value?.player?.activePokemon;
+      if (pokemon) {
+        console.log('=== POKEMON SWITCH DETECTED ===');
+        console.log('New Pokemon:', pokemon.name);
+        console.log('Pokemon skills:', pokemon.skills);
+        console.log('Skills count:', pokemon.skills?.length);
+        console.log('Full Pokemon data:', pokemon);
+        
+        const pokemonId = pokemon.pokemonId || pokemon.id || 25;
+        const pokemonType = pokemon.types?.[0] || pokemon.pokemonType || 'normal';
+        await playerPokemonModel.loadPokemon(pokemonId, pokemonType);
+        playerPokemonModel.playIdleAnimation();
+        addBattleLog(`Switched to ${pokemon.name}!`, 'info');
+      }
+    }
+  }
+);
+
+watch(
+  () => currentBattle.value?.opponent?.activePokemon?.uid,
+  async (newUid, oldUid) => {
+    if (newUid && oldUid && newUid !== oldUid && opponentPokemonModel) {
+      const pokemon = currentBattle.value?.opponent?.activePokemon;
+      if (pokemon) {
+        const pokemonId = pokemon.pokemonId || pokemon.id || 6;
+        const pokemonType = pokemon.types?.[0] || pokemon.pokemonType || 'fire';
+        await opponentPokemonModel.loadPokemon(pokemonId, pokemonType);
+        opponentPokemonModel.playIdleAnimation();
+        addBattleLog(`Opponent switched to ${pokemon.name}!`, 'info');
+      }
+    }
+  }
+);
+
+// Watch for battle log updates from store
+watch(
+  battleLog,
+  (newLogs, oldLogs) => {
+    if (newLogs && newLogs.length > (oldLogs?.length || 0)) {
+      // Get the latest log
+      const latestLog = newLogs[newLogs.length - 1];
+      if (latestLog) {
+        // Determine log type based on message content
+        let logType: BattleLog['type'] = 'info';
+        if (latestLog.message.includes('damage')) logType = 'damage';
+        else if (latestLog.message.includes('used') || latestLog.message.includes('attack'))
+          logType = 'attack';
+        else if (latestLog.message.includes('heal') || latestLog.message.includes('restored'))
+          logType = 'heal';
+
+        addBattleLog(latestLog.message, logType);
+
+        // Play animations for opponent's turn based on log message
+        if (latestLog.message.includes('Opponent') && latestLog.message.includes('used')) {
+          // Opponent is attacking - play animations
+          handleOpponentAttackAnimation();
+        }
+      }
+    }
+  },
+  { deep: true }
+);
 
 onMounted(() => {
   // Detect optimal performance
   battle3DStore.detectOptimalPerformance();
   initializeBattleArena();
 });
+
+// Watch for player Pokemon changes - watch both store and props
+watch(
+  () => ({
+    storeUid: currentBattle.value?.player?.activePokemon?.uid,
+    storeName: currentBattle.value?.player?.activePokemon?.name,
+    propId: props.playerPokemon?.id,
+    propName: props.playerPokemon?.name
+  }), 
+  async (newVal, oldVal) => {
+    // Skip if no scene or no model loaded yet
+    if (!scene || !playerPokemonModel) return;
+    
+    // Check if this is a real change (not initial load)
+    const hasOldValue = oldVal.storeUid || oldVal.propId;
+    const hasNewValue = newVal.storeUid || newVal.propId;
+    
+    if (!hasOldValue || !hasNewValue) return;
+    
+    // Check if Pokemon actually changed
+    const storeChanged = oldVal.storeUid && newVal.storeUid && oldVal.storeUid !== newVal.storeUid;
+    const propsChanged = oldVal.propId && newVal.propId && oldVal.propId !== newVal.propId;
+    const nameChanged = oldVal.storeName && newVal.storeName && oldVal.storeName !== newVal.storeName;
+    
+    if (storeChanged || propsChanged || nameChanged) {
+      console.log('Player Pokemon changed, updating 3D model');
+      console.log('Old:', oldVal);
+      console.log('New:', newVal);
+      await updatePlayerPokemonModel();
+    }
+  },
+  { deep: true }
+);
+
+// Watch for opponent Pokemon changes - watch both store and props
+watch(
+  () => ({
+    storeUid: currentBattle.value?.opponent?.activePokemon?.uid,
+    storeName: currentBattle.value?.opponent?.activePokemon?.name,
+    propId: props.opponentPokemon?.id,
+    propName: props.opponentPokemon?.name
+  }), 
+  async (newVal, oldVal) => {
+    // Skip if no scene or no model loaded yet
+    if (!scene || !opponentPokemonModel) return;
+    
+    // Check if this is a real change (not initial load)
+    const hasOldValue = oldVal.storeUid || oldVal.propId;
+    const hasNewValue = newVal.storeUid || newVal.propId;
+    
+    if (!hasOldValue || !hasNewValue) return;
+    
+    // Check if Pokemon actually changed
+    const storeChanged = oldVal.storeUid && newVal.storeUid && oldVal.storeUid !== newVal.storeUid;
+    const propsChanged = oldVal.propId && newVal.propId && oldVal.propId !== newVal.propId;
+    const nameChanged = oldVal.storeName && newVal.storeName && oldVal.storeName !== newVal.storeName;
+    
+    if (storeChanged || propsChanged || nameChanged) {
+      console.log('Opponent Pokemon changed, updating 3D model');
+      console.log('Old:', oldVal);
+      console.log('New:', newVal);
+      await updateOpponentPokemonModel();
+    }
+  },
+  { deep: true }
+);
 
 const initializeBattleArena = async () => {
   if (!babylonCanvas.value) return;
@@ -248,19 +421,19 @@ const initializeBattleArena = async () => {
     // Create scene
     scene = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.5, 0.7, 0.9, 1.0);
-    
+
     // Setup camera system
     cameraSystem = new BattleCamera3D(scene);
     cameraSystem.transitionToState('battle', 0);
-    
+
     // Enable image processing and post-processing for effects
     defaultPipeline = new BABYLON.DefaultRenderingPipeline(
-      "defaultPipeline",
+      'defaultPipeline',
       true, // HDR
       scene,
       [scene.activeCamera]
     );
-    
+
     // Configure bloom effect
     defaultPipeline.bloomEnabled = true;
     defaultPipeline.bloomThreshold = 0.8;
@@ -354,154 +527,147 @@ const createBattleField = () => {
 };
 
 const loadPokemonModels = async () => {
-  // Load player Pokemon from props or default
-  const playerData = props.playerPokemon || {
-    id: 25,
-    name: 'Pikachu',
-    types: ['electric'],
-    stats: { hp: 100, attack: 55, defense: 40, speed: 90 }
-  };
-  
-  // Update player stats based on Pokemon data
-  if (playerData.stats) {
-    playerHP.value = playerData.stats.hp || 100;
-    playerMaxHP.value = playerData.stats.hp || 100;
-    playerStats.value = {
-      atk: playerData.stats.attack || 50,
-      def: playerData.stats.defense || 40,
-      spd: playerData.stats.speed || 60,
-      type: (playerData.types?.[0] || 'normal') as SkillElement
+  // Get Pokemon data from battle store or props as fallback
+  const battle = currentBattle.value;
+  const playerData = props.playerPokemon ||
+    battle?.player?.activePokemon || {
+      id: 25,
+      name: 'Pikachu',
+      types: ['electric'],
+      stats: { hp: 100, attack: 55, defense: 40, speed: 90 },
     };
-  }
-  
-  // Load player Pokemon model
-  playerPokemon = new Pokemon3DModel(scene);
-  await playerPokemon.loadPokemon(playerData.id || 25, playerData.types?.[0] || 'electric');
-  playerPokemon.setPosition(new BABYLON.Vector3(-6, 1, 0));
-  playerPokemon.playIdleAnimation();
-  
-  // Update player skills based on Pokemon type
-  updatePlayerSkills(playerStats.value.type);
 
-  // Load opponent Pokemon from props or default
-  const opponentData = props.opponentPokemon || {
-    id: 6,
-    name: 'Charizard',
-    types: ['fire', 'flying'],
-    stats: { hp: 120, attack: 84, defense: 78, speed: 100 }
-  };
-  
-  // Update opponent stats based on Pokemon data
-  if (opponentData.stats) {
-    opponentHP.value = opponentData.stats.hp || 100;
-    opponentMaxHP.value = opponentData.stats.hp || 100;
-    opponentStats.value = {
-      atk: opponentData.stats.attack || 55,
-      def: opponentData.stats.defense || 45,
-      spd: opponentData.stats.speed || 45,
-      type: (opponentData.types?.[0] || 'fire') as SkillElement
+  const opponentData = props.opponentPokemon ||
+    battle?.opponent?.activePokemon || {
+      id: 6,
+      name: 'Charizard',
+      types: ['fire', 'flying'],
+      stats: { hp: 120, attack: 84, defense: 78, speed: 100 },
     };
-  }
-  
+
+  // Load player Pokemon model
+  const playerPokemonId = playerData.pokemonId || playerData.id || 25;
+  const playerType = playerData.types?.[0] || playerData.pokemonType || 'electric';
+
+  playerPokemonModel = new Pokemon3DModel(scene);
+  await playerPokemonModel.loadPokemon(playerPokemonId, playerType);
+  playerPokemonModel.setPosition(new BABYLON.Vector3(-6, 1, 0));
+  playerPokemonModel.playIdleAnimation();
+
   // Load opponent Pokemon model
-  opponentPokemon = new Pokemon3DModel(scene);
-  await opponentPokemon.loadPokemon(opponentData.id || 6, opponentData.types?.[0] || 'fire');
-  opponentPokemon.setPosition(new BABYLON.Vector3(6, 1, 0));
-  opponentPokemon.playIdleAnimation();
+  const opponentPokemonId = opponentData.pokemonId || opponentData.id || 6;
+  const opponentType = opponentData.types?.[0] || opponentData.pokemonType || 'fire';
+
+  opponentPokemonModel = new Pokemon3DModel(scene);
+  await opponentPokemonModel.loadPokemon(opponentPokemonId, opponentType);
+  opponentPokemonModel.setPosition(new BABYLON.Vector3(6, 1, 0));
+  opponentPokemonModel.playIdleAnimation();
+};
+
+// Update player Pokemon model when switching
+const updatePlayerPokemonModel = async () => {
+  if (!scene) return;
+
+  // Get Pokemon data from props first (already transformed), fallback to store
+  const playerData = props.playerPokemon || currentBattle.value?.player?.activePokemon;
+  if (!playerData) return;
+
+  const playerPokemonId = playerData.pokemonId || playerData.id || 25;
+  const playerType = playerData.types?.[0] || playerData.pokemonType || 'electric';
+
+  console.log('Updating player Pokemon model:', {
+    name: playerData.name,
+    id: playerPokemonId,
+    type: playerType,
+    data: playerData
+  });
+
+  // Create switch out effect
+  if (playerPokemonModel) {
+    createSwitchEffect(playerPokemonModel.getPosition(), true);
+    
+    // Wait a bit for the effect
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Dispose old model
+    playerPokemonModel.dispose();
+  }
+
+  // Load new model
+  playerPokemonModel = new Pokemon3DModel(scene);
+  await playerPokemonModel.loadPokemon(playerPokemonId, playerType);
+  playerPokemonModel.setPosition(new BABYLON.Vector3(-6, 1, 0));
+  
+  // Create switch in effect
+  createSwitchEffect(playerPokemonModel.getPosition(), false);
+  playerPokemonModel.playIdleAnimation();
+
+  console.log(`Player switched to ${playerData.name} (ID: ${playerPokemonId})`);
+};
+
+// Update opponent Pokemon model when switching
+const updateOpponentPokemonModel = async () => {
+  if (!scene) return;
+
+  // Get Pokemon data from props first (already transformed), fallback to store
+  const opponentData = props.opponentPokemon || currentBattle.value?.opponent?.activePokemon;
+  if (!opponentData) return;
+
+  const opponentPokemonId = opponentData.pokemonId || opponentData.id || 6;
+  const opponentType = opponentData.types?.[0] || opponentData.pokemonType || 'fire';
+
+  console.log('Updating opponent Pokemon model:', {
+    name: opponentData.name,
+    id: opponentPokemonId,
+    type: opponentType,
+    data: opponentData
+  });
+
+  // Create switch out effect
+  if (opponentPokemonModel) {
+    createSwitchEffect(opponentPokemonModel.getPosition(), true);
+    
+    // Wait a bit for the effect
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Dispose old model
+    opponentPokemonModel.dispose();
+  }
+
+  // Load new model
+  opponentPokemonModel = new Pokemon3DModel(scene);
+  await opponentPokemonModel.loadPokemon(opponentPokemonId, opponentType);
+  opponentPokemonModel.setPosition(new BABYLON.Vector3(6, 1, 0));
+  
+  // Create switch in effect
+  createSwitchEffect(opponentPokemonModel.getPosition(), false);
+  opponentPokemonModel.playIdleAnimation();
+
+  console.log(`Opponent switched to ${opponentData.name} (ID: ${opponentPokemonId})`);
 };
 
 const loadBattleData = () => {
-  // Load battle data from cardBattle store
-  const battle = cardBattleStore.currentBattle;
+  // This function is now mainly for logging/debugging
+  // Battle data is automatically synced via computed properties
+  const battle = currentBattle.value;
   if (battle) {
-    // Update HP values
-    if (battle.player?.activePokemon) {
-      playerHP.value = battle.player.activePokemon.hp;
-      playerMaxHP.value = battle.player.activePokemon.maxHp;
-    }
-    if (battle.opponent?.activePokemon) {
-      opponentHP.value = battle.opponent.activePokemon.hp;
-      opponentMaxHP.value = battle.opponent.activePokemon.maxHp;
-    }
-    
-    // Update energy
-    currentEnergy.value = battle.player?.energy || 3;
-    
-    // Load correct Pokemon models
-    // This would be expanded to load the actual Pokemon from the battle
+    console.log('Battle data loaded from store:', {
+      playerHP: battle.player?.activePokemon?.hp,
+      opponentHP: battle.opponent?.activePokemon?.hp,
+      currentTurn: battle.currentTurn,
+    });
   }
-};
-
-// Update player skills based on Pokemon type
-const updatePlayerSkills = (pokemonType: SkillElement) => {
-  const typeSkills = getSkillsByType(pokemonType);
-  
-  // Select up to 4 skills for the Pokemon
-  // Priority: 1 ultimate, 1 special, 1 physical, 1 status/additional
-  const ultimate = typeSkills.find(s => s.category === 'ultimate');
-  const special = typeSkills.filter(s => s.category === 'special' && s.id !== ultimate?.id);
-  const physical = typeSkills.filter(s => s.category === 'physical');
-  const status = typeSkills.filter(s => s.category === 'status');
-  
-  const selectedSkills: Skill[] = [];
-  
-  // Add one of each category if available
-  if (ultimate) selectedSkills.push(ultimate);
-  if (special.length > 0) selectedSkills.push(special[0]);
-  if (physical.length > 0) selectedSkills.push(physical[0]);
-  if (status.length > 0) selectedSkills.push(status[0]);
-  
-  // Fill remaining slots with other skills
-  while (selectedSkills.length < 4) {
-    const remaining = typeSkills.filter(s => !selectedSkills.some(sel => sel.id === s.id));
-    if (remaining.length === 0) break;
-    selectedSkills.push(remaining[0]);
-  }
-  
-  // If still not enough skills, add basic moves
-  if (selectedSkills.length < 4) {
-    const basicMoves = ['tackle', 'quick_attack'].map(id => SKILL_DATABASE.find(s => s.id === id)!);
-    for (const move of basicMoves) {
-      if (selectedSkills.length < 4 && !selectedSkills.some(s => s.id === move.id)) {
-        selectedSkills.push(move);
-      }
-    }
-  }
-  
-  // Update player skills with cooldown tracking
-  playerSkills.value = selectedSkills.slice(0, 4).map(skill => ({
-    ...skill,
-    currentCooldown: 0
-  }));
 };
 
 const executeSkill = async (skill: Skill) => {
+  if (!isPlayerTurn.value) return;
+
   try {
-    // Disable player turn
-    isPlayerTurn.value = false;
     selectedSkill.value = skill;
 
-    // Consume energy
-    currentEnergy.value -= skill.energy;
-
-    // Update cooldown
-    const skillIndex = playerSkills.value.findIndex(s => s.id === skill.id);
-    if (skillIndex >= 0) {
-      playerSkills.value[skillIndex].currentCooldown = skill.cooldown;
-    }
-
-    // Check for combo
-    let comboBonus = 0;
-    if (skill.combo && skill.combo.requiresSkill === lastUsedSkill.value) {
-      comboBonus = skill.combo.bonusDamage || 0;
-      comboCount.value++;
-      addBattleLog(`COMBO x${comboCount.value}!`, 'info');
-    } else {
-      comboCount.value = 0;
-    }
-
-    // Update last used skill
-    lastUsedSkill.value = skill.id;
+    // Store HP before action for animation purposes
+    const playerHPBefore = playerHP.value;
+    const opponentHPBefore = opponentHP.value;
 
     // Transition camera based on skill category
     if (skill.category === 'ultimate') {
@@ -512,373 +678,186 @@ const executeSkill = async (skill: Skill) => {
 
     // Focus on the center of action to see both Pokemon and skills
     const battleCenter = BABYLON.Vector3.Lerp(
-      playerPokemon.getPosition(),
-      opponentPokemon.getPosition(),
+      playerPokemonModel.getPosition(),
+      opponentPokemonModel.getPosition(),
       0.5
     ).add(new BABYLON.Vector3(0, 1, 0));
     cameraSystem.focusOnTarget(battleCenter, 600);
 
     // Play attack animation
-    playerPokemon.playAttackAnimation();
+    playerPokemonModel.playAttackAnimation();
 
     // Add battle intensity effect
     addBattleIntensity();
-    
+
     // Add subtle camera rotation for dynamic viewing
     cameraSystem.rotateAroundTarget(1500);
-    
+
     // Add speed lines for quick attacks
     if (skill.id === 'quick_attack' || skill.category === 'physical') {
-      createSpeedLines(playerPokemon.getPosition().x < 0 ? 1 : -1);
+      createSpeedLines(playerPokemonModel.getPosition().x < 0 ? 1 : -1);
     }
 
     // Create skill visual effects
-    await createSkillEffect(skill, playerPokemon, opponentPokemon);
-    
+    await createSkillEffect(skill, playerPokemonModel, opponentPokemonModel);
+
     // Emit skill executed event
     emit('skill-executed', skill);
-    
+
     // Add additional effects based on skill category
     if (skill.category === 'physical') {
-      createSlashEffect(opponentPokemon.getPosition(), playerPokemon.getPosition().x < 0 ? 1 : -1);
+      createSlashEffect(
+        opponentPokemonModel.getPosition(),
+        playerPokemonModel.getPosition().x < 0 ? 1 : -1
+      );
     } else if (skill.category === 'special' && skill.element === 'psychic') {
-      createEnergyDrain(opponentPokemon.getPosition(), playerPokemon.getPosition());
+      createEnergyDrain(opponentPokemonModel.getPosition(), playerPokemonModel.getPosition());
     }
 
     // Wait for animation
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, 800));
 
-    // Process skill effects
-    for (const effect of skill.effects) {
-      switch (effect.type) {
-        case 'damage':
-          // Calculate effectiveness first
-          const effectiveness = TYPE_EFFECTIVENESS[skill.element]?.[opponentStats.value.type] || 1;
-          const effectivenessText = getEffectivenessText(effectiveness);
-          
-          const damage = calculateDamage(
-            skill,
-            playerStats.value.type,
-            opponentStats.value.type,
-            playerStats.value,
-            opponentStats.value,
-            comboBonus
-          );
-          
-          opponentHP.value = Math.max(0, opponentHP.value - damage);
-          
-          // Play hurt animation
-          opponentPokemon.playHurtAnimation();
-          
-          // Create multiple impact effects
-          createImpactFlash(opponentPokemon.getPosition(), new BABYLON.Color3(1, 0.5, 0));
-          createHitRipple(opponentPokemon.getPosition());
-          createDamageWave(opponentPokemon.getPosition(), effectiveness > 1);
-          
-          // Play impact sound
-          if (soundService.isEnabled()) {
-            soundService.play('attack-hit', 0.8);
-          }
-          
-          // Screen effects for critical hits
-          if (effectiveness > 1) {
-            createScreenFlash(new BABYLON.Color4(1, 0.8, 0, 0.3));
-            createRadialBlur(opponentPokemon.getPosition());
-            // Play critical hit sound
-            if (soundService.isEnabled()) {
-              setTimeout(() => soundService.play('legendary-reveal', 0.5), 100);
-            }
-          }
-          
-          // Camera shake based on damage
-          const shakeIntensity = Math.min(damage / 20, 10);
-          cameraSystem.shake(shakeIntensity, 200);
-          
-          // Zoom effect for heavy hits
-          if (damage > 50) {
-            cameraSystem.zoomPunch(0.9, 300);
-          }
-          
-          addBattleLog(
-            `${skill.name} dealt ${damage} damage! ${effectivenessText}`,
-            'attack'
-          );
-          
-          // Emit attack hit event
-          emit('attack-hit', { damage, effectiveness, skill });
-          
-          // Show damage number
-          await showDamageNumber(opponentPokemon.getPosition(), damage, effectiveness > 1);
-          break;
-          
-        case 'heal':
-          const healAmount = effect.value || 0;
-          playerHP.value = Math.min(playerMaxHP.value, playerHP.value + healAmount);
-          addBattleLog(`Restored ${healAmount} HP!`, 'heal');
-          await showHealEffect(playerPokemon.getPosition(), healAmount);
-          break;
-          
-        case 'buff':
-          // Apply buff to stats
-          if (effect.stat && effect.value) {
-            playerStats.value[effect.stat] += effect.value;
-            addBattleLog(`${effect.stat.toUpperCase()} increased by ${effect.value}!`, 'info');
-          }
-          break;
-          
-        case 'status':
-          // Apply status effect with chance
-          if (effect.chance && Math.random() * 100 < effect.chance) {
-            addBattleLog(`Inflicted ${effect.status} on opponent!`, 'info');
-            await showStatusEffect(opponentPokemon.getPosition(), effect.status!);
-          }
-          break;
+    // Execute the action through the store - this handles all damage calculation and state updates
+    cardBattleStore.executePlayerAction({
+      type: 'attack',
+      skill,
+    });
+
+    // Wait a bit for store to update
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Calculate damage from HP difference for visual effects
+    const opponentHPAfter = opponentHP.value;
+    const damage = opponentHPBefore - opponentHPAfter;
+
+    if (damage > 0) {
+      // Play hurt animation
+      opponentPokemonModel.playHurtAnimation();
+
+      // Create multiple impact effects
+      createImpactFlash(opponentPokemonModel.getPosition(), new BABYLON.Color3(1, 0.5, 0));
+      createHitRipple(opponentPokemonModel.getPosition());
+      createDamageWave(opponentPokemonModel.getPosition(), damage > 40);
+
+      // Play impact sound
+      if (soundService.isEnabled()) {
+        soundService.play('attack-hit', 0.8);
       }
-    }
 
-    // Check if opponent fainted
-    if (opponentHP.value <= 0) {
-      await handleBattleEnd(true);
-      return;
+      // Screen effects for critical hits
+      if (damage > 40) {
+        createScreenFlash(new BABYLON.Color4(1, 0.8, 0, 0.3));
+        createRadialBlur(opponentPokemonModel.getPosition());
+        // Play critical hit sound
+        if (soundService.isEnabled()) {
+          setTimeout(() => soundService.play('legendary-reveal', 0.5), 100);
+        }
+      }
+
+      // Camera shake based on damage
+      const shakeIntensity = Math.min(damage / 20, 10);
+      cameraSystem.shake(shakeIntensity, 200);
+
+      // Zoom effect for heavy hits
+      if (damage > 50) {
+        cameraSystem.zoomPunch(0.9, 300);
+      }
+
+      // Emit attack hit event
+      emit('attack-hit', { damage, skill });
+
+      // Show damage number
+      await showDamageNumber(opponentPokemonModel.getPosition(), damage, damage > 40);
     }
 
     // Return camera to battle view
     await cameraSystem.transitionToState('battle', 1000);
 
-    // Opponent turn
-    await opponentTurn();
-
-    // Update cooldowns
-    playerSkills.value.forEach(s => {
-      if (s.currentCooldown && s.currentCooldown > 0) {
-        s.currentCooldown--;
-      }
-    });
-
-    // Regenerate energy
-    const energyRegen = 2 + Math.floor(turnCount.value / 5); // More energy as battle progresses
-    currentEnergy.value = Math.min(maxEnergy.value, currentEnergy.value + energyRegen);
-    
-    turnCount.value++;
-
-    // Enable player turn
-    isPlayerTurn.value = true;
     selectedSkill.value = null;
   } catch (error) {
     console.error('Error executing skill:', error);
-    isPlayerTurn.value = true;
+    selectedSkill.value = null;
   }
 };
 
-const opponentTurn = async () => {
-  // AI opponent turn with strategic skill selection
-  await new Promise(resolve => setTimeout(resolve, 1000));
+// Opponent turn is now handled automatically by the cardBattleStore
+// We just need to watch for changes and play animations
+const handleOpponentAttackAnimation = async () => {
+  if (!opponentPokemonModel || !playerPokemonModel) return;
 
-  // Get opponent's available skills based on type
-  const opponentSkills = getSkillsByType(opponentStats.value.type).slice(0, 4);
-  
-  // AI decision making
-  const opponentEnergy = 5; // Assume opponent has full energy
-  const playerHPPercent = (playerHP.value / playerMaxHP.value) * 100;
-  const opponentHPPercent = (opponentHP.value / opponentMaxHP.value) * 100;
-  
-  let selectedSkill: Skill | null = null;
-  
-  // AI Strategy
-  if (opponentHPPercent < 30 && opponentSkills.some(s => s.category === 'status' && s.effects.some(e => e.type === 'heal'))) {
-    // Low health - try to heal
-    selectedSkill = opponentSkills.find(s => s.effects.some(e => e.type === 'heal'))!;
-  } else if (playerHPPercent < 40 && opponentSkills.some(s => s.category === 'ultimate' && s.energy <= opponentEnergy)) {
-    // Player low health - use ultimate if available
-    selectedSkill = opponentSkills.find(s => s.category === 'ultimate' && s.energy <= opponentEnergy)!;
-  } else {
-    // Normal attack - choose based on type effectiveness
-    const damageSkills = opponentSkills.filter(s => s.power > 0 && s.energy <= opponentEnergy);
-    
-    // Calculate effectiveness for each skill
-    const skillsWithEffectiveness = damageSkills.map(skill => {
-      const effectiveness = TYPE_EFFECTIVENESS[skill.element]?.[playerStats.value.type] || 1;
-      return { skill, effectiveness };
-    });
-    
-    // Prefer super effective moves
-    const superEffective = skillsWithEffectiveness.filter(s => s.effectiveness > 1);
-    if (superEffective.length > 0) {
-      selectedSkill = superEffective.reduce((best, current) => 
-        current.skill.power * current.effectiveness > best.skill.power * best.effectiveness ? current : best
-      ).skill;
-    } else {
-      // Otherwise use highest damage skill that's not resisted
-      const notResisted = skillsWithEffectiveness.filter(s => s.effectiveness >= 1);
-      if (notResisted.length > 0) {
-        selectedSkill = notResisted.reduce((best, current) => 
-          current.skill.power > best.skill.power ? current : best
-        ).skill;
-      } else {
-        // Fall back to any available skill
-        selectedSkill = damageSkills[0];
-      }
-    }
-  }
-  
-  // Default skill if none selected
-  if (!selectedSkill) {
-    selectedSkill = {
-      id: 'tackle',
-      name: 'Tackle',
-      description: 'A physical attack',
-      element: 'normal',
-      category: 'physical',
-      power: 30,
-      accuracy: 100,
-      energy: 1,
-      cooldown: 0,
-      target: 'single',
-      effects: [{ type: 'damage', value: 30 }]
-    };
-  }
+  try {
+    // Store HP before for damage calculation
+    const playerHPBefore = playerHP.value;
 
-  // Add battle log
-  addBattleLog(`Opponent is preparing ${selectedSkill.name}!`, 'info');
-
-  // Transition camera
-  if (selectedSkill.category === 'ultimate') {
-    await cameraSystem.transitionToState('critical', 800);
-  } else {
+    // Transition camera
     await cameraSystem.transitionToState('attack', 800);
-  }
-  
-  // Focus on the center of action to see both Pokemon and skills
-  const battleCenter = BABYLON.Vector3.Lerp(
-    opponentPokemon.getPosition(),
-    playerPokemon.getPosition(),
-    0.5
-  ).add(new BABYLON.Vector3(0, 1, 0));
-  cameraSystem.focusOnTarget(battleCenter, 600);
 
-  // Play attack animation
-  opponentPokemon.playAttackAnimation();
-  
-  // Add battle intensity
-  addBattleIntensity();
-  
-  // Add subtle camera rotation for dynamic viewing
-  cameraSystem.rotateAroundTarget(1500);
-  
-  // Add speed lines for physical attacks
-  if (selectedSkill.category === 'physical') {
-    createSpeedLines(opponentPokemon.getPosition().x < 0 ? 1 : -1);
-  }
+    // Focus on battle center
+    const battleCenter = BABYLON.Vector3.Lerp(
+      opponentPokemonModel.getPosition(),
+      playerPokemonModel.getPosition(),
+      0.5
+    ).add(new BABYLON.Vector3(0, 1, 0));
+    cameraSystem.focusOnTarget(battleCenter, 600);
 
-  // Create skill effect
-  await createSkillEffect(selectedSkill, opponentPokemon, playerPokemon);
-  
-  // Add additional effects based on skill category
-  if (selectedSkill.category === 'physical') {
-    createSlashEffect(playerPokemon.getPosition(), opponentPokemon.getPosition().x < 0 ? 1 : -1);
-  } else if (selectedSkill.category === 'special' && selectedSkill.element === 'psychic') {
-    createEnergyDrain(playerPokemon.getPosition(), opponentPokemon.getPosition());
-  }
+    // Play attack animation
+    opponentPokemonModel.playAttackAnimation();
 
-  await new Promise(resolve => setTimeout(resolve, 1000));
+    // Add battle intensity
+    addBattleIntensity();
 
-  // Process skill effects
-  for (const effect of selectedSkill.effects) {
-    switch (effect.type) {
-      case 'damage':
-        // Calculate effectiveness first
-        const effectiveness = TYPE_EFFECTIVENESS[selectedSkill.element]?.[playerStats.value.type] || 1;
-        const effectivenessText = getEffectivenessText(effectiveness);
-        
-        const damage = calculateDamage(
-          selectedSkill,
-          opponentStats.value.type,
-          playerStats.value.type,
-          opponentStats.value,
-          playerStats.value,
-          0
-        );
-        
-        playerHP.value = Math.max(0, playerHP.value - damage);
-        
-        // Play hurt animation
-        playerPokemon.playHurtAnimation();
-        
-        // Create multiple impact effects
-        createImpactFlash(playerPokemon.getPosition(), new BABYLON.Color3(1, 0.5, 0));
-        createHitRipple(playerPokemon.getPosition());
-        createDamageWave(playerPokemon.getPosition(), effectiveness > 1);
-        
-        // Play impact sound
+    // Add subtle camera rotation
+    cameraSystem.rotateAroundTarget(1500);
+
+    // Wait for animation
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Calculate damage from HP difference
+    const playerHPAfter = playerHP.value;
+    const damage = playerHPBefore - playerHPAfter;
+
+    if (damage > 0) {
+      // Play hurt animation
+      playerPokemonModel.playHurtAnimation();
+
+      // Create impact effects
+      createImpactFlash(playerPokemonModel.getPosition(), new BABYLON.Color3(1, 0.5, 0));
+      createHitRipple(playerPokemonModel.getPosition());
+      createDamageWave(playerPokemonModel.getPosition(), damage > 40);
+
+      // Play impact sound
+      if (soundService.isEnabled()) {
+        soundService.play('attack-hit', 0.8);
+      }
+
+      // Screen effects for critical hits
+      if (damage > 40) {
+        createScreenFlash(new BABYLON.Color4(1, 0, 0, 0.3));
+        createRadialBlur(playerPokemonModel.getPosition());
         if (soundService.isEnabled()) {
-          soundService.play('attack-hit', 0.8);
+          setTimeout(() => soundService.play('legendary-reveal', 0.5), 100);
         }
-        
-        // Screen effects for critical hits
-        if (effectiveness > 1) {
-          createScreenFlash(new BABYLON.Color4(1, 0, 0, 0.3));
-          createRadialBlur(playerPokemon.getPosition());
-          // Play critical hit sound
-          if (soundService.isEnabled()) {
-            setTimeout(() => soundService.play('legendary-reveal', 0.5), 100);
-          }
-        }
-        
-        // Camera shake
-        const shakeIntensity = Math.min(damage / 20, 10);
-        cameraSystem.shake(shakeIntensity, 200);
-        
-        // Zoom effect for heavy hits
-        if (damage > 50) {
-          cameraSystem.zoomPunch(1.1, 300);
-        }
-        
-        addBattleLog(
-          `Opponent's ${selectedSkill.name} dealt ${damage} damage! ${effectivenessText}`,
-          'damage'
-        );
-        
-        // Show damage number
-        await showDamageNumber(playerPokemon.getPosition(), damage, effectiveness > 1);
-        break;
-        
-      case 'heal':
-        const healAmount = effect.value || 0;
-        opponentHP.value = Math.min(opponentMaxHP.value, opponentHP.value + healAmount);
-        addBattleLog(`Opponent restored ${healAmount} HP!`, 'heal');
-        await showHealEffect(opponentPokemon.getPosition(), healAmount);
-        break;
-        
-      case 'buff':
-        if (effect.stat && effect.value) {
-          opponentStats.value[effect.stat] += effect.value;
-          addBattleLog(`Opponent's ${effect.stat.toUpperCase()} increased!`, 'info');
-        }
-        break;
-        
-      case 'status':
-        if (effect.chance && Math.random() * 100 < effect.chance) {
-          addBattleLog(`You were inflicted with ${effect.status}!`, 'info');
-          await showStatusEffect(playerPokemon.getPosition(), effect.status!);
-        }
-        break;
+      }
+
+      // Camera shake
+      const shakeIntensity = Math.min(damage / 20, 10);
+      cameraSystem.shake(shakeIntensity, 200);
+
+      // Show damage number
+      await showDamageNumber(playerPokemonModel.getPosition(), damage, damage > 40);
     }
-  }
 
-  // Check if player fainted
-  if (playerHP.value <= 0) {
-    await handleBattleEnd(false);
-    return;
+    // Return camera to battle view
+    await cameraSystem.transitionToState('battle', 1000);
+  } catch (error) {
+    console.error('Error in opponent attack animation:', error);
   }
-
-  // Return camera to battle view
-  await cameraSystem.transitionToState('battle', 1000);
 };
 
 const handleBattleEnd = async (playerWon: boolean) => {
   // Set the battle result to show victory/defeat UI
   battleResult.value = playerWon ? 'victory' : 'defeat';
-  
+
   // Play appropriate sound effects
   if (soundService.isEnabled()) {
     if (playerWon) {
@@ -891,36 +870,36 @@ const handleBattleEnd = async (playerWon: boolean) => {
       setTimeout(() => soundService.play('pokemon-faint', 0.7), 500);
     }
   }
-  
+
   // Camera transitions and animations
   if (playerWon) {
     await cameraSystem.transitionToState('victory', 1500);
-    playerPokemon.playVictoryAnimation();
-    opponentPokemon.playDefeatAnimation();
+    playerPokemonModel.playVictoryAnimation();
+    opponentPokemonModel.playDefeatAnimation();
     addBattleLog('Player wins!', 'info');
     battle3DStore.transitionToPhase('victory');
-    
+
     // Emit pokemon-faint event for opponent
     emit('pokemon-faint', {
       pokemon: 'opponent',
       isPlayer: false,
-      remainingHP: 0
+      remainingHP: 0,
     });
   } else {
     await cameraSystem.transitionToState('defeat', 1500);
-    opponentPokemon.playVictoryAnimation();
-    playerPokemon.playDefeatAnimation();
+    opponentPokemonModel.playVictoryAnimation();
+    playerPokemonModel.playDefeatAnimation();
     addBattleLog('Player was defeated...', 'info');
     battle3DStore.transitionToPhase('defeat');
-    
+
     // Emit pokemon-faint event for player
     emit('pokemon-faint', {
       pokemon: 'player',
       isPlayer: true,
-      remainingHP: 0
+      remainingHP: 0,
     });
   }
-  
+
   // Emit battle end event
   emit('battle-end', playerWon ? 'victory' : 'defeat');
 };
@@ -928,50 +907,66 @@ const handleBattleEnd = async (playerWon: boolean) => {
 const restartBattle = async () => {
   // Hide battle result overlay
   battleResult.value = null;
-  
-  // Reset battle state
-  playerHP.value = playerMaxHP.value;
-  opponentHP.value = opponentMaxHP.value;
-  currentEnergy.value = 3;
-  isPlayerTurn.value = true;
-  selectedSkill.value = null;
-  lastUsedSkill.value = '';
-  comboCount.value = 0;
-  turnCount.value = 0;
-  
-  // Reset skill cooldowns
-  playerSkills.value.forEach(skill => {
-    skill.currentCooldown = 0;
-  });
-  
+
   // Clear battle logs
   battleLogs.value = [];
-  addBattleLog('Battle restarted!', 'info');
-  
+
+  // Restart battle through store
+  const battleMode = currentBattle.value?.mode || 'pvp';
+  cardBattleStore.startBattle(battleMode);
+
   // Reset battle phase
   battle3DStore.transitionToPhase('preparation');
-  
+
   // Reset camera
   await cameraSystem.transitionToState('battle', 1000);
-  
-  // Reset Pokemon animations
-  playerPokemon.playIdleAnimation();
-  opponentPokemon.playIdleAnimation();
-  
+
+  // Reload Pokemon models with new battle data
+  await loadPokemonModels();
+
   // Play battle start sound
   if (soundService.isEnabled()) {
     soundService.play('battle-start', 0.7);
   }
-  
+
+  addBattleLog('Battle restarted!', 'info');
+
   // Emit battle start event
   emit('battle-start');
 };
-
 
 const addBattleLog = (message: string, type: BattleLog['type']) => {
   battleLogs.value.push({ message, type });
   if (battleLogs.value.length > 5) {
     battleLogs.value.shift();
+  }
+};
+
+const debugSkills = () => {
+  console.log('=== DEBUG SKILLS ===');
+  const activePokemon = currentBattle.value?.player?.activePokemon;
+  console.log('Active Pokemon:', activePokemon?.name);
+  console.log('Skills in currentBattle:', activePokemon?.skills);
+  console.log('Skills count:', activePokemon?.skills?.length);
+  console.log('playerSkills computed:', playerSkills.value);
+  console.log('playerSkills count:', playerSkills.value.length);
+  
+  // Try to force regenerate skills
+  if (activePokemon && activePokemon.skills?.length <= 1) {
+    console.log('Attempting to force regenerate skills...');
+    const types = activePokemon.types || [activePokemon.pokemonType || 'normal'];
+    console.log('Pokemon types:', types);
+    
+    // Force add some skills for testing
+    const testSkills = [
+      { id: 'tackle', name: 'Tackle', energy: 1, power: 40, damage: 40, accuracy: 100, element: 'normal', effects: [] },
+      { id: 'quick_attack', name: 'Quick Attack', energy: 2, power: 60, damage: 60, accuracy: 100, element: 'normal', effects: [] },
+      { id: 'thunderbolt', name: 'Thunderbolt', energy: 3, power: 90, damage: 90, accuracy: 100, element: 'electric', effects: [] }
+    ];
+    
+    console.log('Force setting test skills:', testSkills);
+    activePokemon.skills = testSkills;
+    console.log('Skills after force set:', activePokemon.skills);
   }
 };
 
@@ -985,16 +980,20 @@ const handleResize = () => {
 };
 
 // Visual effect functions
-const createSkillEffect = async (skill: Skill, attacker: Pokemon3DModel, target: Pokemon3DModel) => {
+const createSkillEffect = async (
+  skill: Skill,
+  attacker: Pokemon3DModel,
+  target: Pokemon3DModel
+) => {
   const attackerPos = attacker.getPosition();
   const targetPos = target.getPosition();
-  
+
   // Play skill sound effect based on element
   const skillSoundName = `skill-${skill.element}`;
   if (soundService.isEnabled()) {
     soundService.play(skillSoundName, 0.7);
   }
-  
+
   switch (skill.element) {
     case 'electric':
       await createLightningEffect(attackerPos, targetPos);
@@ -1057,18 +1056,22 @@ const createSkillEffect = async (skill: Skill, attacker: Pokemon3DModel, target:
 
 const createLightningEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create lightning bolt mesh
-  const lightning = BABYLON.MeshBuilder.CreateLines('lightning', {
-    points: generateLightningPath(start, end),
-  }, scene);
-  
+  const lightning = BABYLON.MeshBuilder.CreateLines(
+    'lightning',
+    {
+      points: generateLightningPath(start, end),
+    },
+    scene
+  );
+
   const lightningMat = new BABYLON.StandardMaterial('lightningMat', scene);
   lightningMat.emissiveColor = new BABYLON.Color3(1, 1, 0);
   lightning.material = lightningMat;
-  
+
   // Add glow
   const gl = scene.getEngine();
   lightning.renderingGroupId = 1;
-  
+
   // Animate
   let alpha = 1;
   const animateInterval = setInterval(() => {
@@ -1084,7 +1087,7 @@ const createLightningEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector
 const generateLightningPath = (start: BABYLON.Vector3, end: BABYLON.Vector3): BABYLON.Vector3[] => {
   const points: BABYLON.Vector3[] = [start];
   const segments = 5;
-  
+
   for (let i = 1; i < segments; i++) {
     const t = i / segments;
     const basePoint = BABYLON.Vector3.Lerp(start, end, t);
@@ -1095,7 +1098,7 @@ const generateLightningPath = (start: BABYLON.Vector3, end: BABYLON.Vector3): BA
     );
     points.push(basePoint.add(offset));
   }
-  
+
   points.push(end);
   return points;
 };
@@ -1104,11 +1107,11 @@ const createFireballEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3
   // Create fireball
   const fireball = BABYLON.MeshBuilder.CreateSphere('fireball', { diameter: 0.5 }, scene);
   fireball.position = start.clone();
-  
+
   const fireballMat = new BABYLON.StandardMaterial('fireballMat', scene);
   fireballMat.emissiveColor = new BABYLON.Color3(1, 0.3, 0);
   fireball.material = fireballMat;
-  
+
   // Create fire particles
   const fireParticles = new BABYLON.ParticleSystem('fireParticles', 200, scene);
   fireParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1124,7 +1127,7 @@ const createFireballEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3
   fireParticles.maxLifeTime = 0.5;
   fireParticles.emitRate = 100;
   fireParticles.start();
-  
+
   // Animate fireball
   const moveAnimation = new BABYLON.Animation(
     'fireballMove',
@@ -1135,36 +1138,28 @@ const createFireballEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3
   );
   moveAnimation.setKeys([
     { frame: 0, value: start },
-    { frame: 30, value: end }
+    { frame: 30, value: end },
   ]);
-  
-  const animatable = scene.beginDirectAnimation(
-    fireball,
-    [moveAnimation],
-    0,
-    30,
-    false,
-    1,
-    () => {
-      fireParticles.stop();
-      fireball.dispose();
-      createExplosionEffect(end);
-    }
-  );
+
+  const animatable = scene.beginDirectAnimation(fireball, [moveAnimation], 0, 30, false, 1, () => {
+    fireParticles.stop();
+    fireball.dispose();
+    createExplosionEffect(end);
+  });
 };
 
 const createWaterEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create water sphere projectile
   const waterBall = BABYLON.MeshBuilder.CreateSphere('waterBall', { diameter: 0.8 }, scene);
   waterBall.position = start.clone();
-  
+
   const waterMat = new BABYLON.StandardMaterial('waterMat', scene);
   waterMat.diffuseColor = new BABYLON.Color3(0.2, 0.5, 1);
   waterMat.specularColor = new BABYLON.Color3(0.5, 0.8, 1);
   waterMat.emissiveColor = new BABYLON.Color3(0.1, 0.3, 0.6);
   waterMat.alpha = 0.8;
   waterBall.material = waterMat;
-  
+
   // Water particles trail
   const waterTrail = new BABYLON.ParticleSystem('waterTrail', 100, scene);
   waterTrail.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1180,7 +1175,7 @@ const createWaterEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   waterTrail.maxLifeTime = 0.8;
   waterTrail.emitRate = 50;
   waterTrail.start();
-  
+
   // Animate water ball
   const waterAnimation = new BABYLON.Animation(
     'waterMove',
@@ -1191,22 +1186,14 @@ const createWaterEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   );
   waterAnimation.setKeys([
     { frame: 0, value: start },
-    { frame: 20, value: end }
+    { frame: 20, value: end },
   ]);
-  
-  scene.beginDirectAnimation(
-    waterBall,
-    [waterAnimation],
-    0,
-    20,
-    false,
-    1,
-    () => {
-      waterTrail.stop();
-      waterBall.dispose();
-      createWaterSplashEffect(end);
-    }
-  );
+
+  scene.beginDirectAnimation(waterBall, [waterAnimation], 0, 20, false, 1, () => {
+    waterTrail.stop();
+    waterBall.dispose();
+    createWaterSplashEffect(end);
+  });
 };
 
 const createWaterSplashEffect = async (position: BABYLON.Vector3) => {
@@ -1233,9 +1220,9 @@ const createWaterSplashEffect = async (position: BABYLON.Vector3) => {
   splash.minEmitPower = 2;
   splash.maxEmitPower = 4;
   splash.updateSpeed = 0.01;
-  
+
   splash.start();
-  
+
   setTimeout(() => {
     splash.stop();
   }, 300);
@@ -1262,10 +1249,10 @@ const createLeafStormEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector
   leafStorm.maxAngularSpeed = Math.PI;
   leafStorm.minEmitPower = 3;
   leafStorm.maxEmitPower = 5;
-  
+
   // Move emitter towards target
   leafStorm.start();
-  
+
   let t = 0;
   const moveInterval = setInterval(() => {
     t += 0.05;
@@ -1277,13 +1264,17 @@ const createLeafStormEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector
   }, 50);
 };
 
-const createGenericEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3, element: SkillElement) => {
+const createGenericEffect = async (
+  start: BABYLON.Vector3,
+  end: BABYLON.Vector3,
+  element: SkillElement
+) => {
   // Create generic projectile
   const projectile = BABYLON.MeshBuilder.CreateSphere('projectile', { diameter: 0.4 }, scene);
   projectile.position = start.clone();
-  
+
   const projectileMat = new BABYLON.StandardMaterial('projectileMat', scene);
-  
+
   // Set color based on element
   const elementColors: Record<string, BABYLON.Color3> = {
     psychic: new BABYLON.Color3(1, 0, 1),
@@ -1299,12 +1290,12 @@ const createGenericEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3,
     bug: new BABYLON.Color3(0.6, 0.8, 0.2),
     ghost: new BABYLON.Color3(0.4, 0.3, 0.6),
     steel: new BABYLON.Color3(0.6, 0.6, 0.7),
-    normal: new BABYLON.Color3(0.8, 0.8, 0.8)
+    normal: new BABYLON.Color3(0.8, 0.8, 0.8),
   };
-  
+
   projectileMat.emissiveColor = elementColors[element] || new BABYLON.Color3(1, 1, 1);
   projectile.material = projectileMat;
-  
+
   // Animate projectile
   const projectileAnimation = new BABYLON.Animation(
     'projectileMove',
@@ -1315,41 +1306,37 @@ const createGenericEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3,
   );
   projectileAnimation.setKeys([
     { frame: 0, value: start },
-    { frame: 20, value: end }
+    { frame: 20, value: end },
   ]);
-  
-  scene.beginDirectAnimation(
-    projectile,
-    [projectileAnimation],
-    0,
-    20,
-    false,
-    1,
-    () => {
-      projectile.dispose();
-    }
-  );
+
+  scene.beginDirectAnimation(projectile, [projectileAnimation], 0, 20, false, 1, () => {
+    projectile.dispose();
+  });
 };
 
 // Ice type effect
 const createIceEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create ice shard
-  const iceShard = BABYLON.MeshBuilder.CreateCylinder('iceShard', { 
-    height: 1, 
-    diameterTop: 0.1, 
-    diameterBottom: 0.4,
-    tessellation: 6 
-  }, scene);
+  const iceShard = BABYLON.MeshBuilder.CreateCylinder(
+    'iceShard',
+    {
+      height: 1,
+      diameterTop: 0.1,
+      diameterBottom: 0.4,
+      tessellation: 6,
+    },
+    scene
+  );
   iceShard.position = start.clone();
   iceShard.rotation.z = Math.PI / 2;
-  
+
   const iceMat = new BABYLON.StandardMaterial('iceMat', scene);
   iceMat.diffuseColor = new BABYLON.Color3(0.7, 0.9, 1);
   iceMat.specularColor = new BABYLON.Color3(1, 1, 1);
   iceMat.emissiveColor = new BABYLON.Color3(0.3, 0.5, 0.7);
   iceMat.alpha = 0.9;
   iceShard.material = iceMat;
-  
+
   // Ice particles
   const iceParticles = new BABYLON.ParticleSystem('iceParticles', 50, scene);
   iceParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1360,12 +1347,12 @@ const createIceEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => 
   iceParticles.maxSize = 0.2;
   iceParticles.emitRate = 30;
   iceParticles.start();
-  
+
   // Rotate while moving
   scene.registerBeforeRender(() => {
     if (iceShard) iceShard.rotation.x += 0.1;
   });
-  
+
   // Animate
   const iceAnimation = new BABYLON.Animation(
     'iceMove',
@@ -1376,23 +1363,15 @@ const createIceEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => 
   );
   iceAnimation.setKeys([
     { frame: 0, value: start },
-    { frame: 25, value: end }
+    { frame: 25, value: end },
   ]);
-  
-  scene.beginDirectAnimation(
-    iceShard,
-    [iceAnimation],
-    0,
-    25,
-    false,
-    1,
-    () => {
-      iceParticles.stop();
-      iceShard.dispose();
-      // Create freeze effect at target
-      createFreezeEffect(end);
-    }
-  );
+
+  scene.beginDirectAnimation(iceShard, [iceAnimation], 0, 25, false, 1, () => {
+    iceParticles.stop();
+    iceShard.dispose();
+    // Create freeze effect at target
+    createFreezeEffect(end);
+  });
 };
 
 const createFreezeEffect = (position: BABYLON.Vector3) => {
@@ -1400,17 +1379,15 @@ const createFreezeEffect = (position: BABYLON.Vector3) => {
   for (let i = 0; i < 6; i++) {
     const angle = (i / 6) * Math.PI * 2;
     const crystal = BABYLON.MeshBuilder.CreateBox('crystal', { size: 0.3 }, scene);
-    crystal.position = position.add(new BABYLON.Vector3(
-      Math.cos(angle) * 0.5,
-      0,
-      Math.sin(angle) * 0.5
-    ));
-    
+    crystal.position = position.add(
+      new BABYLON.Vector3(Math.cos(angle) * 0.5, 0, Math.sin(angle) * 0.5)
+    );
+
     const crystalMat = new BABYLON.StandardMaterial('crystalMat', scene);
     crystalMat.diffuseColor = new BABYLON.Color3(0.7, 0.9, 1);
     crystalMat.alpha = 0.7;
     crystal.material = crystalMat;
-    
+
     // Grow animation
     crystal.scaling = new BABYLON.Vector3(0.1, 0.1, 0.1);
     const growAnimation = new BABYLON.Animation(
@@ -1423,9 +1400,9 @@ const createFreezeEffect = (position: BABYLON.Vector3) => {
     growAnimation.setKeys([
       { frame: 0, value: new BABYLON.Vector3(0.1, 0.1, 0.1) },
       { frame: 10, value: new BABYLON.Vector3(1, 2, 1) },
-      { frame: 30, value: new BABYLON.Vector3(0, 0, 0) }
+      { frame: 30, value: new BABYLON.Vector3(0, 0, 0) },
     ]);
-    
+
     scene.beginDirectAnimation(crystal, [growAnimation], 0, 30, false, 1, () => {
       crystal.dispose();
     });
@@ -1437,30 +1414,34 @@ const createPsychicEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3)
   // Create psychic orb
   const psychicOrb = BABYLON.MeshBuilder.CreateSphere('psychicOrb', { diameter: 0.6 }, scene);
   psychicOrb.position = start.clone();
-  
+
   const psychicMat = new BABYLON.StandardMaterial('psychicMat', scene);
   psychicMat.diffuseColor = new BABYLON.Color3(1, 0.3, 0.8);
   psychicMat.emissiveColor = new BABYLON.Color3(0.8, 0.2, 0.6);
   psychicMat.alpha = 0.7;
   psychicOrb.material = psychicMat;
-  
+
   // Psychic rings
   const rings = [];
   for (let i = 0; i < 3; i++) {
-    const ring = BABYLON.MeshBuilder.CreateTorus(`psychicRing${i}`, {
-      diameter: 1 + i * 0.3,
-      thickness: 0.05
-    }, scene);
+    const ring = BABYLON.MeshBuilder.CreateTorus(
+      `psychicRing${i}`,
+      {
+        diameter: 1 + i * 0.3,
+        thickness: 0.05,
+      },
+      scene
+    );
     ring.parent = psychicOrb;
     ring.rotation.x = Math.PI / 2;
-    
+
     const ringMat = new BABYLON.StandardMaterial(`ringMat${i}`, scene);
     ringMat.emissiveColor = new BABYLON.Color3(1, 0.5, 1);
     ringMat.alpha = 0.5;
     ring.material = ringMat;
     rings.push(ring);
   }
-  
+
   // Rotate rings
   scene.registerBeforeRender(() => {
     rings.forEach((ring, i) => {
@@ -1470,7 +1451,7 @@ const createPsychicEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3)
       }
     });
   });
-  
+
   // Wavy movement
   const psychicAnimation = new BABYLON.Animation(
     'psychicMove',
@@ -1479,7 +1460,7 @@ const createPsychicEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3)
     BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   const keys = [];
   for (let i = 0; i <= 30; i++) {
     const t = i / 30;
@@ -1488,40 +1469,32 @@ const createPsychicEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3)
     keys.push({ frame: i, value: pos });
   }
   psychicAnimation.setKeys(keys);
-  
-  scene.beginDirectAnimation(
-    psychicOrb,
-    [psychicAnimation],
-    0,
-    30,
-    false,
-    1,
-    () => {
-      rings.forEach(ring => ring.dispose());
-      psychicOrb.dispose();
-      createPsychicWave(end);
-    }
-  );
+
+  scene.beginDirectAnimation(psychicOrb, [psychicAnimation], 0, 30, false, 1, () => {
+    rings.forEach(ring => ring.dispose());
+    psychicOrb.dispose();
+    createPsychicWave(end);
+  });
 };
 
 const createPsychicWave = (position: BABYLON.Vector3) => {
   const wave = BABYLON.MeshBuilder.CreateSphere('psychicWave', { diameter: 0.5 }, scene);
   wave.position = position;
-  
+
   const waveMat = new BABYLON.StandardMaterial('psychicWaveMat', scene);
   waveMat.emissiveColor = new BABYLON.Color3(1, 0.3, 1);
   waveMat.alpha = 0.6;
   wave.material = waveMat;
-  
+
   let scale = 0.5;
   let alpha = 0.6;
-  
+
   const expandInterval = setInterval(() => {
     scale += 0.3;
     alpha -= 0.06;
     wave.scaling = new BABYLON.Vector3(scale, scale, scale);
     waveMat.alpha = alpha;
-    
+
     if (alpha <= 0) {
       clearInterval(expandInterval);
       wave.dispose();
@@ -1534,13 +1507,13 @@ const createDarkEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
   // Create dark sphere
   const darkSphere = BABYLON.MeshBuilder.CreateSphere('darkSphere', { diameter: 0.8 }, scene);
   darkSphere.position = start.clone();
-  
+
   const darkMat = new BABYLON.StandardMaterial('darkMat', scene);
   darkMat.diffuseColor = new BABYLON.Color3(0.1, 0, 0.2);
   darkMat.emissiveColor = new BABYLON.Color3(0.3, 0, 0.4);
   darkMat.alpha = 0.8;
   darkSphere.material = darkMat;
-  
+
   // Dark particles
   const darkParticles = new BABYLON.ParticleSystem('darkParticles', 100, scene);
   darkParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1552,7 +1525,7 @@ const createDarkEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
   darkParticles.emitRate = 50;
   darkParticles.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
   darkParticles.start();
-  
+
   // Shadow trail
   const trail = [];
   scene.registerBeforeRender(() => {
@@ -1564,7 +1537,7 @@ const createDarkEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
       shadowMat.alpha = 0.3;
       shadow.material = shadowMat;
       trail.push(shadow);
-      
+
       // Fade out trail
       setTimeout(() => {
         let alpha = 0.3;
@@ -1579,7 +1552,7 @@ const createDarkEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
       }, 100);
     }
   });
-  
+
   // Animate
   const darkAnimation = new BABYLON.Animation(
     'darkMove',
@@ -1590,22 +1563,14 @@ const createDarkEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
   );
   darkAnimation.setKeys([
     { frame: 0, value: start },
-    { frame: 25, value: end }
+    { frame: 25, value: end },
   ]);
-  
-  scene.beginDirectAnimation(
-    darkSphere,
-    [darkAnimation],
-    0,
-    25,
-    false,
-    1,
-    () => {
-      darkParticles.stop();
-      darkSphere.dispose();
-      createDarkExplosion(end);
-    }
-  );
+
+  scene.beginDirectAnimation(darkSphere, [darkAnimation], 0, 25, false, 1, () => {
+    darkParticles.stop();
+    darkSphere.dispose();
+    createDarkExplosion(end);
+  });
 };
 
 const createDarkExplosion = (position: BABYLON.Vector3) => {
@@ -1633,20 +1598,24 @@ const createDarkExplosion = (position: BABYLON.Vector3) => {
 // Dragon type effect
 const createDragonEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create dragon flame
-  const dragonFlame = BABYLON.MeshBuilder.CreateCylinder('dragonFlame', {
-    height: 2,
-    diameterTop: 0.2,
-    diameterBottom: 0.8
-  }, scene);
+  const dragonFlame = BABYLON.MeshBuilder.CreateCylinder(
+    'dragonFlame',
+    {
+      height: 2,
+      diameterTop: 0.2,
+      diameterBottom: 0.8,
+    },
+    scene
+  );
   dragonFlame.position = start.clone();
   dragonFlame.rotation.z = Math.PI / 2;
-  
+
   const flameMat = new BABYLON.StandardMaterial('dragonFlameMat', scene);
   flameMat.diffuseColor = new BABYLON.Color3(0.5, 0, 1);
   flameMat.emissiveColor = new BABYLON.Color3(0.8, 0.2, 1);
   flameMat.alpha = 0.8;
   dragonFlame.material = flameMat;
-  
+
   // Dragon particles
   const dragonParticles = new BABYLON.ParticleSystem('dragonParticles', 150, scene);
   dragonParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1658,7 +1627,7 @@ const createDragonEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
   dragonParticles.emitRate = 100;
   dragonParticles.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
   dragonParticles.start();
-  
+
   // Spiral movement
   const dragonAnimation = new BABYLON.Animation(
     'dragonMove',
@@ -1667,7 +1636,7 @@ const createDragonEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
     BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   const keys = [];
   for (let i = 0; i <= 30; i++) {
     const t = i / 30;
@@ -1678,20 +1647,12 @@ const createDragonEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
     keys.push({ frame: i, value: pos });
   }
   dragonAnimation.setKeys(keys);
-  
-  scene.beginDirectAnimation(
-    dragonFlame,
-    [dragonAnimation],
-    0,
-    30,
-    false,
-    1,
-    () => {
-      dragonParticles.stop();
-      dragonFlame.dispose();
-      createDragonBurst(end);
-    }
-  );
+
+  scene.beginDirectAnimation(dragonFlame, [dragonAnimation], 0, 30, false, 1, () => {
+    dragonParticles.stop();
+    dragonFlame.dispose();
+    createDragonBurst(end);
+  });
 };
 
 const createDragonBurst = (position: BABYLON.Vector3) => {
@@ -1719,13 +1680,13 @@ const createFairyEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   // Create fairy sparkle
   const sparkle = BABYLON.MeshBuilder.CreateSphere('fairySparkle', { diameter: 0.6 }, scene);
   sparkle.position = start.clone();
-  
+
   const sparkleMat = new BABYLON.StandardMaterial('fairyMat', scene);
   sparkleMat.diffuseColor = new BABYLON.Color3(1, 0.7, 0.9);
   sparkleMat.emissiveColor = new BABYLON.Color3(1, 0.5, 0.8);
   sparkleMat.alpha = 0.8;
   sparkle.material = sparkleMat;
-  
+
   // Fairy particles
   const fairyParticles = new BABYLON.ParticleSystem('fairyParticles', 100, scene);
   fairyParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1737,7 +1698,7 @@ const createFairyEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   fairyParticles.emitRate = 50;
   fairyParticles.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
   fairyParticles.start();
-  
+
   // Zigzag animation
   const fairyAnimation = new BABYLON.Animation(
     'fairyMove',
@@ -1746,7 +1707,7 @@ const createFairyEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
     BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   const keys = [];
   for (let i = 0; i <= 30; i++) {
     const t = i / 30;
@@ -1755,35 +1716,27 @@ const createFairyEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
     keys.push({ frame: i, value: pos });
   }
   fairyAnimation.setKeys(keys);
-  
-  scene.beginDirectAnimation(
-    sparkle,
-    [fairyAnimation],
-    0,
-    30,
-    false,
-    1,
-    () => {
-      fairyParticles.stop();
-      sparkle.dispose();
-      createWaterSplashEffect(end);
-    }
-  );
+
+  scene.beginDirectAnimation(sparkle, [fairyAnimation], 0, 30, false, 1, () => {
+    fairyParticles.stop();
+    sparkle.dispose();
+    createWaterSplashEffect(end);
+  });
 };
 
 const createFightingEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create fist mesh
   const fist = BABYLON.MeshBuilder.CreateSphere('fist', { diameter: 0.8 }, scene);
   fist.position = start.clone();
-  
+
   const fistMat = new BABYLON.StandardMaterial('fistMat', scene);
   fistMat.diffuseColor = new BABYLON.Color3(0.8, 0.6, 0.4);
   fistMat.emissiveColor = new BABYLON.Color3(0.5, 0.3, 0.2);
   fist.material = fistMat;
-  
+
   // Speed lines
   createSpeedLines(start.x < 0 ? 1 : -1);
-  
+
   // Direct punch animation
   const punchAnimation = new BABYLON.Animation(
     'punch',
@@ -1792,24 +1745,16 @@ const createFightingEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3
     BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   punchAnimation.setKeys([
     { frame: 0, value: start },
-    { frame: 10, value: end }
+    { frame: 10, value: end },
   ]);
-  
-  scene.beginDirectAnimation(
-    fist,
-    [punchAnimation],
-    0,
-    10,
-    false,
-    1,
-    () => {
-      fist.dispose();
-      createHitEffect(end);
-    }
-  );
+
+  scene.beginDirectAnimation(fist, [punchAnimation], 0, 10, false, 1, () => {
+    fist.dispose();
+    createHitEffect(end);
+  });
 };
 
 const createFlyingEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
@@ -1817,13 +1762,13 @@ const createFlyingEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
   const windSlash = BABYLON.MeshBuilder.CreatePlane('windSlash', { size: 1.5 }, scene);
   windSlash.position = start.clone();
   windSlash.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-  
+
   const windMat = new BABYLON.StandardMaterial('windMat', scene);
   windMat.diffuseColor = new BABYLON.Color3(0.7, 0.9, 1);
   windMat.emissiveColor = new BABYLON.Color3(0.5, 0.7, 0.9);
   windMat.alpha = 0.6;
   windSlash.material = windMat;
-  
+
   // Wind particles
   const windParticles = new BABYLON.ParticleSystem('windParticles', 50, scene);
   windParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1835,7 +1780,7 @@ const createFlyingEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
   windParticles.emitRate = 30;
   windParticles.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
   windParticles.start();
-  
+
   // Spiral flight
   const flyAnimation = new BABYLON.Animation(
     'fly',
@@ -1844,7 +1789,7 @@ const createFlyingEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
     BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   const keys = [];
   for (let i = 0; i <= 20; i++) {
     const t = i / 20;
@@ -1855,32 +1800,24 @@ const createFlyingEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
     keys.push({ frame: i, value: pos });
   }
   flyAnimation.setKeys(keys);
-  
-  scene.beginDirectAnimation(
-    windSlash,
-    [flyAnimation],
-    0,
-    20,
-    false,
-    1,
-    () => {
-      windParticles.stop();
-      windSlash.dispose();
-    }
-  );
+
+  scene.beginDirectAnimation(windSlash, [flyAnimation], 0, 20, false, 1, () => {
+    windParticles.stop();
+    windSlash.dispose();
+  });
 };
 
 const createPoisonEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create poison bubble
   const poisonBubble = BABYLON.MeshBuilder.CreateSphere('poisonBubble', { diameter: 0.7 }, scene);
   poisonBubble.position = start.clone();
-  
+
   const poisonMat = new BABYLON.StandardMaterial('poisonMat', scene);
   poisonMat.diffuseColor = new BABYLON.Color3(0.5, 0, 0.5);
   poisonMat.emissiveColor = new BABYLON.Color3(0.3, 0, 0.3);
   poisonMat.alpha = 0.7;
   poisonBubble.material = poisonMat;
-  
+
   // Poison gas particles
   const poisonGas = new BABYLON.ParticleSystem('poisonGas', 80, scene);
   poisonGas.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1892,7 +1829,7 @@ const createPoisonEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
   poisonGas.emitRate = 40;
   poisonGas.blendMode = BABYLON.ParticleSystem.BLENDMODE_STANDARD;
   poisonGas.start();
-  
+
   // Wobbly movement
   const poisonAnimation = new BABYLON.Animation(
     'poisonMove',
@@ -1901,7 +1838,7 @@ const createPoisonEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
     BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   const keys = [];
   for (let i = 0; i <= 25; i++) {
     const t = i / 25;
@@ -1910,21 +1847,13 @@ const createPoisonEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
     keys.push({ frame: i, value: pos });
   }
   poisonAnimation.setKeys(keys);
-  
-  scene.beginDirectAnimation(
-    poisonBubble,
-    [poisonAnimation],
-    0,
-    25,
-    false,
-    1,
-    () => {
-      poisonGas.stop();
-      poisonBubble.dispose();
-      // Create lingering poison cloud
-      createPoisonCloud(end);
-    }
-  );
+
+  scene.beginDirectAnimation(poisonBubble, [poisonAnimation], 0, 25, false, 1, () => {
+    poisonGas.stop();
+    poisonBubble.dispose();
+    // Create lingering poison cloud
+    createPoisonCloud(end);
+  });
 };
 
 const createPoisonCloud = (position: BABYLON.Vector3) => {
@@ -1944,33 +1873,43 @@ const createPoisonCloud = (position: BABYLON.Vector3) => {
   cloud.blendMode = BABYLON.ParticleSystem.BLENDMODE_STANDARD;
   cloud.gravity = new BABYLON.Vector3(0, -0.5, 0);
   cloud.start();
-  
+
   setTimeout(() => cloud.stop(), 1000);
 };
 
 const createGroundEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create earthquake effect
-  const groundCrack = BABYLON.MeshBuilder.CreateGround('groundCrack', { width: 2, height: 0.5 }, scene);
+  const groundCrack = BABYLON.MeshBuilder.CreateGround(
+    'groundCrack',
+    { width: 2, height: 0.5 },
+    scene
+  );
   groundCrack.position = end.clone();
   groundCrack.position.y = 0;
-  
+
   const crackMat = new BABYLON.StandardMaterial('crackMat', scene);
   crackMat.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0);
   crackMat.emissiveColor = new BABYLON.Color3(0.2, 0.1, 0);
   groundCrack.material = crackMat;
-  
+
   // Shake camera
-  const originalCameraPosition = camera.position.clone();
-  for (let i = 0; i < 10; i++) {
+  if (scene.activeCamera) {
+    const originalCameraPosition = scene.activeCamera.position.clone();
+    for (let i = 0; i < 10; i++) {
+      setTimeout(() => {
+        if (scene.activeCamera) {
+          scene.activeCamera.position.x = originalCameraPosition.x + (Math.random() - 0.5) * 0.2;
+          scene.activeCamera.position.y = originalCameraPosition.y + (Math.random() - 0.5) * 0.2;
+        }
+      }, i * 50);
+    }
     setTimeout(() => {
-      camera.position.x = originalCameraPosition.x + (Math.random() - 0.5) * 0.2;
-      camera.position.y = originalCameraPosition.y + (Math.random() - 0.5) * 0.2;
-    }, i * 50);
+      if (scene.activeCamera) {
+        scene.activeCamera.position = originalCameraPosition;
+      }
+    }, 500);
   }
-  setTimeout(() => {
-    camera.position = originalCameraPosition;
-  }, 500);
-  
+
   // Rock particles
   const rocks = new BABYLON.ParticleSystem('rocks', 50, scene);
   rocks.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -1990,7 +1929,7 @@ const createGroundEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
   rocks.maxLifeTime = 1;
   rocks.gravity = new BABYLON.Vector3(0, -9.8, 0);
   rocks.start();
-  
+
   setTimeout(() => {
     rocks.stop();
     groundCrack.dispose();
@@ -2001,12 +1940,12 @@ const createRockEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
   // Create rock projectile
   const rock = BABYLON.MeshBuilder.CreateBox('rock', { size: 0.6 }, scene);
   rock.position = start.clone();
-  
+
   const rockMat = new BABYLON.StandardMaterial('rockMat', scene);
   rockMat.diffuseColor = new BABYLON.Color3(0.5, 0.4, 0.3);
   rockMat.emissiveColor = new BABYLON.Color3(0.2, 0.15, 0.1);
   rock.material = rockMat;
-  
+
   // Rock rotation
   const rotAnimation = new BABYLON.Animation(
     'rockRot',
@@ -2017,9 +1956,9 @@ const createRockEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
   );
   rotAnimation.setKeys([
     { frame: 0, value: new BABYLON.Vector3(0, 0, 0) },
-    { frame: 20, value: new BABYLON.Vector3(Math.PI * 2, Math.PI * 2, 0) }
+    { frame: 20, value: new BABYLON.Vector3(Math.PI * 2, Math.PI * 2, 0) },
   ]);
-  
+
   // Rock movement
   const moveAnimation = new BABYLON.Animation(
     'rockMove',
@@ -2028,7 +1967,7 @@ const createRockEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
     BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   // Arc trajectory
   const keys = [];
   for (let i = 0; i <= 20; i++) {
@@ -2038,19 +1977,11 @@ const createRockEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =>
     keys.push({ frame: i, value: pos });
   }
   moveAnimation.setKeys(keys);
-  
-  scene.beginDirectAnimation(
-    rock,
-    [moveAnimation, rotAnimation],
-    0,
-    20,
-    false,
-    1,
-    () => {
-      rock.dispose();
-      createHitEffect(end);
-    }
-  );
+
+  scene.beginDirectAnimation(rock, [moveAnimation, rotAnimation], 0, 20, false, 1, () => {
+    rock.dispose();
+    createHitEffect(end);
+  });
 };
 
 const createBugEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
@@ -2069,7 +2000,7 @@ const createBugEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => 
   bugSwarm.minEmitPower = 3;
   bugSwarm.maxEmitPower = 5;
   bugSwarm.start();
-  
+
   // Move emitter to target
   const moveAnimation = new BABYLON.Animation(
     'bugMove',
@@ -2078,12 +2009,12 @@ const createBugEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => 
     BABYLON.Animation.ANIMATIONTYPE_FLOAT,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   moveAnimation.setKeys([
     { frame: 0, value: start.x },
-    { frame: 30, value: end.x }
+    { frame: 30, value: end.x },
   ]);
-  
+
   const animatable = scene.beginDirectAnimation(
     bugSwarm.emitter,
     [moveAnimation],
@@ -2095,14 +2026,32 @@ const createBugEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => 
       bugSwarm.stop();
     }
   );
-  
+
   // Also animate Y and Z
-  const moveY = new BABYLON.Animation('bugMoveY', 'y', 60, BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-  moveY.setKeys([{ frame: 0, value: start.y }, { frame: 30, value: end.y }]);
-  
-  const moveZ = new BABYLON.Animation('bugMoveZ', 'z', 60, BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-  moveZ.setKeys([{ frame: 0, value: start.z }, { frame: 30, value: end.z }]);
-  
+  const moveY = new BABYLON.Animation(
+    'bugMoveY',
+    'y',
+    60,
+    BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+    BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+  );
+  moveY.setKeys([
+    { frame: 0, value: start.y },
+    { frame: 30, value: end.y },
+  ]);
+
+  const moveZ = new BABYLON.Animation(
+    'bugMoveZ',
+    'z',
+    60,
+    BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+    BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+  );
+  moveZ.setKeys([
+    { frame: 0, value: start.z },
+    { frame: 30, value: end.z },
+  ]);
+
   scene.beginDirectAnimation(bugSwarm.emitter, [moveY, moveZ], 0, 30, false, 1);
 };
 
@@ -2110,13 +2059,13 @@ const createGhostEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   // Create ghost orb
   const ghost = BABYLON.MeshBuilder.CreateSphere('ghost', { diameter: 0.8 }, scene);
   ghost.position = start.clone();
-  
+
   const ghostMat = new BABYLON.StandardMaterial('ghostMat', scene);
   ghostMat.diffuseColor = new BABYLON.Color3(0.5, 0.3, 0.7);
   ghostMat.emissiveColor = new BABYLON.Color3(0.3, 0.2, 0.5);
   ghostMat.alpha = 0.5;
   ghost.material = ghostMat;
-  
+
   // Ghost trail
   const ghostTrail = new BABYLON.ParticleSystem('ghostTrail', 50, scene);
   ghostTrail.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -2128,7 +2077,7 @@ const createGhostEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   ghostTrail.emitRate = 30;
   ghostTrail.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
   ghostTrail.start();
-  
+
   // Phasing animation
   const phaseAnimation = new BABYLON.Animation(
     'ghostPhase',
@@ -2140,9 +2089,9 @@ const createGhostEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   phaseAnimation.setKeys([
     { frame: 0, value: 0.5 },
     { frame: 10, value: 0.2 },
-    { frame: 20, value: 0.5 }
+    { frame: 20, value: 0.5 },
   ]);
-  
+
   // Wavy movement
   const moveAnimation = new BABYLON.Animation(
     'ghostMove',
@@ -2151,7 +2100,7 @@ const createGhostEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
     BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
     BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
   );
-  
+
   const keys = [];
   for (let i = 0; i <= 25; i++) {
     const t = i / 25;
@@ -2161,33 +2110,29 @@ const createGhostEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
     keys.push({ frame: i, value: pos });
   }
   moveAnimation.setKeys(keys);
-  
-  scene.beginDirectAnimation(
-    ghost,
-    [moveAnimation, phaseAnimation],
-    0,
-    25,
-    false,
-    1,
-    () => {
-      ghostTrail.stop();
-      ghost.dispose();
-    }
-  );
+
+  scene.beginDirectAnimation(ghost, [moveAnimation, phaseAnimation], 0, 25, false, 1, () => {
+    ghostTrail.stop();
+    ghost.dispose();
+  });
 };
 
 const createSteelEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create metal blade
-  const blade = BABYLON.MeshBuilder.CreateBox('blade', { width: 1.5, height: 0.1, depth: 0.3 }, scene);
+  const blade = BABYLON.MeshBuilder.CreateBox(
+    'blade',
+    { width: 1.5, height: 0.1, depth: 0.3 },
+    scene
+  );
   blade.position = start.clone();
-  
+
   const steelMat = new BABYLON.StandardMaterial('steelMat', scene);
   steelMat.diffuseColor = new BABYLON.Color3(0.7, 0.7, 0.8);
   steelMat.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0.6);
   steelMat.specularColor = new BABYLON.Color3(1, 1, 1);
   steelMat.specularPower = 64;
   blade.material = steelMat;
-  
+
   // Spinning animation
   const spinAnimation = new BABYLON.Animation(
     'bladeSpin',
@@ -2198,9 +2143,9 @@ const createSteelEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   );
   spinAnimation.setKeys([
     { frame: 0, value: 0 },
-    { frame: 20, value: Math.PI * 4 }
+    { frame: 20, value: Math.PI * 4 },
   ]);
-  
+
   // Movement
   const moveAnimation = new BABYLON.Animation(
     'bladeMove',
@@ -2211,9 +2156,9 @@ const createSteelEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   );
   moveAnimation.setKeys([
     { frame: 0, value: start },
-    { frame: 20, value: end }
+    { frame: 20, value: end },
   ]);
-  
+
   // Metal sparks
   const sparks = new BABYLON.ParticleSystem('metalSparks', 30, scene);
   sparks.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -2225,33 +2170,25 @@ const createSteelEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) =
   sparks.emitRate = 30;
   sparks.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
   sparks.start();
-  
-  scene.beginDirectAnimation(
-    blade,
-    [moveAnimation, spinAnimation],
-    0,
-    20,
-    false,
-    1,
-    () => {
-      sparks.stop();
-      blade.dispose();
-      createSlashEffect(end, 1);
-    }
-  );
+
+  scene.beginDirectAnimation(blade, [moveAnimation, spinAnimation], 0, 20, false, 1, () => {
+    sparks.stop();
+    blade.dispose();
+    createSlashEffect(end, 1);
+  });
 };
 
 const createNormalEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) => {
   // Create simple impact
   const impact = BABYLON.MeshBuilder.CreateSphere('normalImpact', { diameter: 0.6 }, scene);
   impact.position = start.clone();
-  
+
   const normalMat = new BABYLON.StandardMaterial('normalMat', scene);
   normalMat.diffuseColor = new BABYLON.Color3(0.8, 0.8, 0.8);
   normalMat.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0.5);
   normalMat.alpha = 0.8;
   impact.material = normalMat;
-  
+
   // Simple particles
   const normalParticles = new BABYLON.ParticleSystem('normalParticles', 30, scene);
   normalParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -2262,7 +2199,7 @@ const createNormalEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
   normalParticles.maxSize = 0.2;
   normalParticles.emitRate = 20;
   normalParticles.start();
-  
+
   // Direct movement
   const moveAnimation = new BABYLON.Animation(
     'normalMove',
@@ -2273,22 +2210,14 @@ const createNormalEffect = async (start: BABYLON.Vector3, end: BABYLON.Vector3) 
   );
   moveAnimation.setKeys([
     { frame: 0, value: start },
-    { frame: 15, value: end }
+    { frame: 15, value: end },
   ]);
-  
-  scene.beginDirectAnimation(
-    impact,
-    [moveAnimation],
-    0,
-    15,
-    false,
-    1,
-    () => {
-      normalParticles.stop();
-      impact.dispose();
-      createHitEffect(end);
-    }
-  );
+
+  scene.beginDirectAnimation(impact, [moveAnimation], 0, 15, false, 1, () => {
+    normalParticles.stop();
+    impact.dispose();
+    createHitEffect(end);
+  });
 };
 
 const createHitEffect = (position: BABYLON.Vector3) => {
@@ -2296,13 +2225,13 @@ const createHitEffect = (position: BABYLON.Vector3) => {
   const impact = BABYLON.MeshBuilder.CreateDisc('hitImpact', { radius: 0.5 }, scene);
   impact.position = position.clone();
   impact.rotation.x = Math.PI / 2;
-  
+
   const impactMat = new BABYLON.StandardMaterial('impactMat', scene);
   impactMat.diffuseColor = new BABYLON.Color3(1, 0.8, 0);
   impactMat.emissiveColor = new BABYLON.Color3(1, 0.6, 0);
   impactMat.alpha = 0.8;
   impact.material = impactMat;
-  
+
   // Hit particles
   const hitParticles = new BABYLON.ParticleSystem('hitParticles', 50, scene);
   hitParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -2317,7 +2246,6 @@ const createHitEffect = (position: BABYLON.Vector3) => {
   hitParticles.minLifeTime = 0.3;
   hitParticles.maxLifeTime = 0.5;
   hitParticles.emitRate = 100;
-  hitParticles.burst = 50;
   hitParticles.targetStopDuration = 0.2;
   hitParticles.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
   hitParticles.gravity = new BABYLON.Vector3(0, -2, 0);
@@ -2326,7 +2254,7 @@ const createHitEffect = (position: BABYLON.Vector3) => {
   hitParticles.minEmitPower = 2;
   hitParticles.maxEmitPower = 4;
   hitParticles.start();
-  
+
   // Scale animation for impact
   const scaleAnimation = new BABYLON.Animation(
     'hitScale',
@@ -2338,9 +2266,9 @@ const createHitEffect = (position: BABYLON.Vector3) => {
   scaleAnimation.setKeys([
     { frame: 0, value: new BABYLON.Vector3(0.1, 0.1, 0.1) },
     { frame: 5, value: new BABYLON.Vector3(1.5, 1.5, 1.5) },
-    { frame: 10, value: new BABYLON.Vector3(2, 2, 2) }
+    { frame: 10, value: new BABYLON.Vector3(2, 2, 2) },
   ]);
-  
+
   // Fade animation
   const fadeAnimation = new BABYLON.Animation(
     'hitFade',
@@ -2352,21 +2280,13 @@ const createHitEffect = (position: BABYLON.Vector3) => {
   fadeAnimation.setKeys([
     { frame: 0, value: 0.8 },
     { frame: 5, value: 0.5 },
-    { frame: 10, value: 0 }
+    { frame: 10, value: 0 },
   ]);
-  
-  scene.beginDirectAnimation(
-    impact,
-    [scaleAnimation, fadeAnimation],
-    0,
-    10,
-    false,
-    1,
-    () => {
-      impact.dispose();
-      hitParticles.stop();
-    }
-  );
+
+  scene.beginDirectAnimation(impact, [scaleAnimation, fadeAnimation], 0, 10, false, 1, () => {
+    impact.dispose();
+    hitParticles.stop();
+  });
 };
 
 const createExplosionEffect = (position: BABYLON.Vector3) => {
@@ -2393,21 +2313,25 @@ const createExplosionEffect = (position: BABYLON.Vector3) => {
   explosion.minEmitPower = 5;
   explosion.maxEmitPower = 10;
   explosion.updateSpeed = 0.01;
-  
+
   explosion.start();
-  
+
   setTimeout(() => {
     explosion.stop();
   }, 100);
 };
 
-const showDamageNumber = async (position: BABYLON.Vector3, damage: number, isCritical: boolean = false) => {
+const showDamageNumber = async (
+  position: BABYLON.Vector3,
+  damage: number,
+  isCritical: boolean = false
+) => {
   // Create 3D text for damage number
   const damageText = BABYLON.MeshBuilder.CreatePlane('damageText', { size: 1 }, scene);
   damageText.position = position.clone();
   damageText.position.y += 1;
   damageText.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-  
+
   // Create dynamic texture for text
   const texture = new BABYLON.DynamicTexture('damageTexture', { width: 256, height: 128 }, scene);
   const textMat = new BABYLON.StandardMaterial('textMat', scene);
@@ -2415,23 +2339,23 @@ const showDamageNumber = async (position: BABYLON.Vector3, damage: number, isCri
   textMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
   texture.hasAlpha = true;
   damageText.material = textMat;
-  
+
   // Draw text
   const font = isCritical ? 'bold 80px Arial' : '60px Arial';
   const color = isCritical ? '#FFD700' : '#FF0000';
   texture.drawText(damage.toString(), null, null, font, color, 'transparent', true);
-  
+
   // Animate floating up and fading
   const startY = damageText.position.y;
   let alpha = 1;
   let y = 0;
-  
+
   const animateInterval = setInterval(() => {
     y += 0.05;
     alpha -= 0.02;
     damageText.position.y = startY + y;
     textMat.alpha = alpha;
-    
+
     if (alpha <= 0) {
       clearInterval(animateInterval);
       damageText.dispose();
@@ -2460,40 +2384,40 @@ const showHealEffect = async (position: BABYLON.Vector3, amount: number) => {
   heal.direction2 = new BABYLON.Vector3(0.5, 2, 0.5);
   heal.minEmitPower = 1;
   heal.maxEmitPower = 2;
-  
+
   heal.start();
-  
+
   // Show heal amount with green color
   const healText = BABYLON.MeshBuilder.CreatePlane('healText', { size: 1 }, scene);
   healText.position = position.clone();
   healText.position.y += 1.5;
   healText.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-  
+
   const texture = new BABYLON.DynamicTexture('healTexture', { width: 256, height: 128 }, scene);
   const textMat = new BABYLON.StandardMaterial('textMat', scene);
   textMat.diffuseTexture = texture;
   textMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
   texture.hasAlpha = true;
   healText.material = textMat;
-  
+
   texture.drawText(`+${amount}`, null, null, '60px Arial', '#00FF00', 'transparent', true);
-  
+
   const startY = healText.position.y;
   let alpha = 1;
   let y = 0;
-  
+
   const animateInterval = setInterval(() => {
     y += 0.05;
     alpha -= 0.02;
     healText.position.y = startY + y;
     textMat.alpha = alpha;
-    
+
     if (alpha <= 0) {
       clearInterval(animateInterval);
       healText.dispose();
     }
   }, 16);
-  
+
   setTimeout(() => {
     heal.stop();
   }, 1000);
@@ -2505,43 +2429,46 @@ const addBattleIntensity = () => {
   if (defaultPipeline) {
     const originalBloomWeight = defaultPipeline.bloomWeight;
     defaultPipeline.bloomWeight = 0.8;
-    
+
     setTimeout(() => {
       defaultPipeline.bloomWeight = originalBloomWeight;
     }, 1000);
   }
-  
+
   // Flash the background slightly
   const originalClearColor = scene.clearColor.clone();
   scene.clearColor = new BABYLON.Color4(0.8, 0.8, 1, 1);
-  
+
   setTimeout(() => {
     scene.clearColor = originalClearColor;
   }, 200);
 };
 
 // Add impact flash on hit
-const createImpactFlash = (position: BABYLON.Vector3, color: BABYLON.Color3 = new BABYLON.Color3(1, 1, 1)) => {
+const createImpactFlash = (
+  position: BABYLON.Vector3,
+  color: BABYLON.Color3 = new BABYLON.Color3(1, 1, 1)
+) => {
   // Create a flash sphere
   const flash = BABYLON.MeshBuilder.CreateSphere('impactFlash', { diameter: 3 }, scene);
   flash.position = position;
-  
+
   const flashMat = new BABYLON.StandardMaterial('flashMat', scene);
   flashMat.emissiveColor = color;
   flashMat.alpha = 0.6;
   flash.material = flashMat;
-  
+
   // Expand and fade
   let scale = 1;
   let alpha = 0.6;
-  
+
   const expandInterval = setInterval(() => {
     scale += 0.3;
     alpha -= 0.06;
-    
+
     flash.scaling = new BABYLON.Vector3(scale, scale, scale);
     flashMat.alpha = alpha;
-    
+
     if (alpha <= 0) {
       clearInterval(expandInterval);
       flash.dispose();
@@ -2551,30 +2478,34 @@ const createImpactFlash = (position: BABYLON.Vector3, color: BABYLON.Color3 = ne
 
 // Create hit ripple effect
 const createHitRipple = (position: BABYLON.Vector3) => {
-  const ripple = BABYLON.MeshBuilder.CreateTorus('hitRipple', {
-    diameter: 2,
-    thickness: 0.1,
-    tessellation: 32
-  }, scene);
+  const ripple = BABYLON.MeshBuilder.CreateTorus(
+    'hitRipple',
+    {
+      diameter: 2,
+      thickness: 0.1,
+      tessellation: 32,
+    },
+    scene
+  );
   ripple.position = position;
   ripple.rotation.x = Math.PI / 2;
-  
+
   const rippleMat = new BABYLON.StandardMaterial('rippleMat', scene);
   rippleMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
   rippleMat.alpha = 0.8;
   ripple.material = rippleMat;
-  
+
   // Animate ripple expansion
   let scale = 0.1;
   let alpha = 0.8;
-  
+
   const expandInterval = setInterval(() => {
     scale += 0.2;
     alpha -= 0.08;
-    
+
     ripple.scaling = new BABYLON.Vector3(scale, scale, scale);
     rippleMat.alpha = alpha;
-    
+
     if (alpha <= 0) {
       clearInterval(expandInterval);
       ripple.dispose();
@@ -2582,18 +2513,78 @@ const createHitRipple = (position: BABYLON.Vector3) => {
   }, 16);
 };
 
+// Create Pokemon switch effect
+const createSwitchEffect = (position: BABYLON.Vector3, isOut: boolean) => {
+  // Create pokeball-like effect
+  const pokeball = BABYLON.MeshBuilder.CreateSphere('pokeball', { diameter: 1.5 }, scene);
+  pokeball.position = position.clone();
+  pokeball.position.y += 1;
+
+  const pokeballMat = new BABYLON.StandardMaterial('pokeballMat', scene);
+  pokeballMat.emissiveColor = isOut ? new BABYLON.Color3(1, 0.2, 0.2) : new BABYLON.Color3(0.2, 0.2, 1);
+  pokeballMat.alpha = 0.8;
+  pokeball.material = pokeballMat;
+
+  // Create beam effect
+  const beam = BABYLON.MeshBuilder.CreateCylinder('beam', { 
+    height: 4, 
+    diameterTop: isOut ? 2 : 0.1, 
+    diameterBottom: isOut ? 0.1 : 2 
+  }, scene);
+  beam.position = position.clone();
+  beam.position.y = 2;
+
+  const beamMat = new BABYLON.StandardMaterial('beamMat', scene);
+  beamMat.emissiveColor = isOut ? new BABYLON.Color3(1, 0.5, 0.5) : new BABYLON.Color3(0.5, 0.5, 1);
+  beamMat.alpha = 0.6;
+  beam.material = beamMat;
+
+  // Animate
+  let scale = isOut ? 1 : 0.1;
+  let alpha = 0.8;
+  let rotation = 0;
+
+  const animateInterval = setInterval(() => {
+    if (isOut) {
+      scale -= 0.1;
+      rotation += 0.3;
+    } else {
+      scale += 0.1;
+      rotation -= 0.3;
+    }
+    alpha -= 0.08;
+
+    pokeball.scaling = new BABYLON.Vector3(scale, scale, scale);
+    pokeball.rotation.y = rotation;
+    beam.scaling.y = scale;
+    pokeballMat.alpha = alpha;
+    beamMat.alpha = alpha * 0.6;
+
+    if (alpha <= 0 || (isOut && scale <= 0) || (!isOut && scale >= 1)) {
+      clearInterval(animateInterval);
+      pokeball.dispose();
+      beam.dispose();
+    }
+  }, 16);
+
+  // Sound effect
+  if (soundService.isEnabled()) {
+    soundService.play(isOut ? 'pokemon-return' : 'pokemon-send', 0.5);
+  }
+};
+
 // Create damage wave effect
 const createDamageWave = (position: BABYLON.Vector3, isCritical: boolean = false) => {
   // Create distortion wave
   const wave = BABYLON.MeshBuilder.CreateSphere('damageWave', { diameter: 0.5 }, scene);
   wave.position = position;
-  
+
   const waveMat = new BABYLON.StandardMaterial('waveMat', scene);
   waveMat.emissiveColor = isCritical ? new BABYLON.Color3(1, 0.5, 0) : new BABYLON.Color3(1, 1, 1);
   waveMat.alpha = 0.3;
   waveMat.backFaceCulling = false;
   wave.material = waveMat;
-  
+
   // Create wave particles
   const waveParticles = new BABYLON.ParticleSystem('waveParticles', 100, scene);
   waveParticles.particleTexture = new BABYLON.Texture('/particle.png', scene);
@@ -2617,20 +2608,20 @@ const createDamageWave = (position: BABYLON.Vector3, isCritical: boolean = false
   waveParticles.updateSpeed = 0.01;
   waveParticles.targetStopDuration = 0.1;
   waveParticles.disposeOnStop = true;
-  
+
   waveParticles.start();
-  
+
   // Animate wave
   let scale = 1;
   let alpha = 0.3;
-  
+
   const expandInterval = setInterval(() => {
     scale += 0.4;
     alpha -= 0.03;
-    
+
     wave.scaling = new BABYLON.Vector3(scale, scale, scale);
     waveMat.alpha = alpha;
-    
+
     if (alpha <= 0) {
       clearInterval(expandInterval);
       wave.dispose();
@@ -2640,28 +2631,32 @@ const createDamageWave = (position: BABYLON.Vector3, isCritical: boolean = false
 
 // Create screen flash effect
 const createScreenFlash = (color: BABYLON.Color4) => {
-  const flash = BABYLON.MeshBuilder.CreatePlane('screenFlash', {
-    width: 100,
-    height: 100
-  }, scene);
-  
+  const flash = BABYLON.MeshBuilder.CreatePlane(
+    'screenFlash',
+    {
+      width: 100,
+      height: 100,
+    },
+    scene
+  );
+
   flash.position = scene.activeCamera!.position.add(
     scene.activeCamera!.getDirection(BABYLON.Vector3.Forward()).scale(5)
   );
   flash.lookAt(scene.activeCamera!.position);
-  
+
   const flashMat = new BABYLON.StandardMaterial('screenFlashMat', scene);
   flashMat.emissiveColor = new BABYLON.Color3(color.r, color.g, color.b);
   flashMat.alpha = color.a;
   flashMat.backFaceCulling = false;
   flash.material = flashMat;
-  
+
   // Fade out
   let alpha = color.a;
   const fadeInterval = setInterval(() => {
     alpha -= 0.05;
     flashMat.alpha = alpha;
-    
+
     if (alpha <= 0) {
       clearInterval(fadeInterval);
       flash.dispose();
@@ -2674,35 +2669,35 @@ const createRadialBlur = (position: BABYLON.Vector3) => {
   // Create blur lines radiating from impact point
   for (let i = 0; i < 8; i++) {
     const angle = (i / 8) * Math.PI * 2;
-    const blurLine = BABYLON.MeshBuilder.CreatePlane('blurLine', {
-      width: 0.1,
-      height: 3
-    }, scene);
-    
+    const blurLine = BABYLON.MeshBuilder.CreatePlane(
+      'blurLine',
+      {
+        width: 0.1,
+        height: 3,
+      },
+      scene
+    );
+
     blurLine.position = position;
     blurLine.rotation.z = angle;
-    
+
     const blurMat = new BABYLON.StandardMaterial('blurMat', scene);
     blurMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
     blurMat.alpha = 0.3;
     blurLine.material = blurMat;
-    
+
     // Animate outward
     let distance = 0;
     let alpha = 0.3;
-    
+
     const moveInterval = setInterval(() => {
       distance += 0.3;
       alpha -= 0.03;
-      
-      const offset = new BABYLON.Vector3(
-        Math.cos(angle) * distance,
-        Math.sin(angle) * distance,
-        0
-      );
+
+      const offset = new BABYLON.Vector3(Math.cos(angle) * distance, Math.sin(angle) * distance, 0);
       blurLine.position = position.add(offset);
       blurMat.alpha = alpha;
-      
+
       if (alpha <= 0) {
         clearInterval(moveInterval);
         blurLine.dispose();
@@ -2713,28 +2708,32 @@ const createRadialBlur = (position: BABYLON.Vector3) => {
 
 // Add slash effect for physical attacks
 const createSlashEffect = (position: BABYLON.Vector3, direction: number) => {
-  const slash = BABYLON.MeshBuilder.CreatePlane('slash', {
-    width: 3,
-    height: 0.5
-  }, scene);
-  
+  const slash = BABYLON.MeshBuilder.CreatePlane(
+    'slash',
+    {
+      width: 3,
+      height: 0.5,
+    },
+    scene
+  );
+
   slash.position = position;
   slash.rotation.z = direction > 0 ? -Math.PI / 4 : Math.PI / 4;
-  
+
   const slashMat = new BABYLON.StandardMaterial('slashMat', scene);
   slashMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
   slashMat.alpha = 0.8;
   slash.material = slashMat;
-  
+
   // Animate slash
   let progress = 0;
   const animateInterval = setInterval(() => {
     progress += 0.1;
-    
+
     // Scale X to create slash motion
     slash.scaling.x = Math.sin(progress * Math.PI) * 3;
     slashMat.alpha = 0.8 * (1 - progress);
-    
+
     if (progress >= 1) {
       clearInterval(animateInterval);
       slash.dispose();
@@ -2745,13 +2744,17 @@ const createSlashEffect = (position: BABYLON.Vector3, direction: number) => {
 // Add energy drain effect for special attacks
 const createEnergyDrain = (from: BABYLON.Vector3, to: BABYLON.Vector3) => {
   const particleCount = 20;
-  
+
   for (let i = 0; i < particleCount; i++) {
     setTimeout(() => {
-      const particle = BABYLON.MeshBuilder.CreateSphere('energyParticle', {
-        diameter: 0.1
-      }, scene);
-      
+      const particle = BABYLON.MeshBuilder.CreateSphere(
+        'energyParticle',
+        {
+          diameter: 0.1,
+        },
+        scene
+      );
+
       particle.position = from.add(
         new BABYLON.Vector3(
           (Math.random() - 0.5) * 2,
@@ -2759,11 +2762,11 @@ const createEnergyDrain = (from: BABYLON.Vector3, to: BABYLON.Vector3) => {
           (Math.random() - 0.5) * 2
         )
       );
-      
+
       const particleMat = new BABYLON.StandardMaterial('energyMat', scene);
       particleMat.emissiveColor = new BABYLON.Color3(0, 1, 1);
       particle.material = particleMat;
-      
+
       // Animate to target
       const animation = new BABYLON.Animation(
         'energyDrain',
@@ -2774,20 +2777,12 @@ const createEnergyDrain = (from: BABYLON.Vector3, to: BABYLON.Vector3) => {
       );
       animation.setKeys([
         { frame: 0, value: particle.position },
-        { frame: 30, value: to }
+        { frame: 30, value: to },
       ]);
-      
-      scene.beginDirectAnimation(
-        particle,
-        [animation],
-        0,
-        30,
-        false,
-        1,
-        () => {
-          particle.dispose();
-        }
-      );
+
+      scene.beginDirectAnimation(particle, [animation], 0, 30, false, 1, () => {
+        particle.dispose();
+      });
     }, i * 50);
   }
 };
@@ -2796,23 +2791,23 @@ const createEnergyDrain = (from: BABYLON.Vector3, to: BABYLON.Vector3) => {
 const createSpeedLines = (direction: number) => {
   const speedLines = new BABYLON.ParticleSystem('speedLines', 100, scene);
   speedLines.particleTexture = new BABYLON.Texture('/particle.png', scene);
-  
+
   // Position behind the camera
   const cameraPos = scene.activeCamera?.position || new BABYLON.Vector3(0, 5, -10);
   speedLines.emitter = cameraPos;
   speedLines.minEmitBox = new BABYLON.Vector3(-10, -5, 0);
   speedLines.maxEmitBox = new BABYLON.Vector3(10, 5, 0);
-  
+
   speedLines.color1 = new BABYLON.Color4(1, 1, 1, 0.3);
   speedLines.color2 = new BABYLON.Color4(1, 1, 1, 0.1);
   speedLines.colorDead = new BABYLON.Color4(1, 1, 1, 0);
-  
+
   speedLines.minSize = 0.1;
   speedLines.maxSize = 5;
   speedLines.minLifeTime = 0.1;
   speedLines.maxLifeTime = 0.3;
   speedLines.emitRate = 200;
-  
+
   speedLines.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
   speedLines.gravity = new BABYLON.Vector3(0, 0, 0);
   speedLines.direction1 = new BABYLON.Vector3(0, 0, 20);
@@ -2820,9 +2815,9 @@ const createSpeedLines = (direction: number) => {
   speedLines.minEmitPower = 10;
   speedLines.maxEmitPower = 20;
   speedLines.updateSpeed = 0.01;
-  
+
   speedLines.start();
-  
+
   setTimeout(() => {
     speedLines.stop();
   }, 300);
@@ -2834,14 +2829,14 @@ const showStatusEffect = async (position: BABYLON.Vector3, status: string) => {
   statusPlane.position = position.clone();
   statusPlane.position.y += 2;
   statusPlane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-  
+
   // Create texture for status
   const texture = new BABYLON.DynamicTexture('statusTexture', { width: 128, height: 128 }, scene);
   const statusMat = new BABYLON.StandardMaterial('statusMat', scene);
   statusMat.diffuseTexture = texture;
   texture.hasAlpha = true;
   statusPlane.material = statusMat;
-  
+
   // Draw status icon/text
   const statusIcons: Record<string, string> = {
     burn: '🔥',
@@ -2849,18 +2844,26 @@ const showStatusEffect = async (position: BABYLON.Vector3, status: string) => {
     paralyze: '⚡',
     poison: '☠️',
     sleep: '💤',
-    confusion: '💫'
+    confusion: '💫',
   };
-  
-  texture.drawText(statusIcons[status] || '!', null, null, '60px Arial', 'white', 'transparent', true);
-  
+
+  texture.drawText(
+    statusIcons[status] || '!',
+    null,
+    null,
+    '60px Arial',
+    'white',
+    'transparent',
+    true
+  );
+
   // Animate
   let alpha = 1;
   const animateInterval = setInterval(() => {
     alpha -= 0.01;
     statusMat.alpha = alpha;
     statusPlane.rotation.y += 0.05;
-    
+
     if (alpha <= 0) {
       clearInterval(animateInterval);
       statusPlane.dispose();
@@ -3010,6 +3013,36 @@ onUnmounted(() => {
   width: 90%;
   max-width: 800px;
   z-index: 10;
+}
+
+.switch-pokemon-btn {
+  position: absolute;
+  top: -50px;
+  right: 0;
+  padding: 10px 20px;
+  background: linear-gradient(45deg, #3b82f6, #2563eb);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+}
+
+.switch-pokemon-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+}
+
+.switch-pokemon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.switch-pokemon-btn i {
+  margin-right: 8px;
 }
 
 .skill-card.disabled {
@@ -3220,14 +3253,18 @@ onUnmounted(() => {
 }
 
 @keyframes rotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .result-particles {
   position: absolute;
   inset: 0;
-  background-image: 
+  background-image:
     radial-gradient(circle at 20% 80%, rgba(251, 191, 36, 0.3) 0%, transparent 50%),
     radial-gradient(circle at 80% 20%, rgba(251, 191, 36, 0.3) 0%, transparent 50%),
     radial-gradient(circle at 40% 40%, rgba(251, 191, 36, 0.2) 0%, transparent 50%);
@@ -3235,15 +3272,20 @@ onUnmounted(() => {
 }
 
 .defeat .result-particles {
-  background-image: 
+  background-image:
     radial-gradient(circle at 20% 80%, rgba(239, 68, 68, 0.3) 0%, transparent 50%),
     radial-gradient(circle at 80% 20%, rgba(239, 68, 68, 0.3) 0%, transparent 50%),
     radial-gradient(circle at 40% 40%, rgba(239, 68, 68, 0.2) 0%, transparent 50%);
 }
 
 @keyframes particleFloat {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-20px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
 }
 
 .result-text {
@@ -3251,6 +3293,7 @@ onUnmounted(() => {
   font-weight: bold;
   margin: 0 0 20px;
   background: linear-gradient(45deg, #fbbf24, #f59e0b);
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   text-shadow: 0 0 40px rgba(251, 191, 36, 0.5);
@@ -3259,14 +3302,20 @@ onUnmounted(() => {
 
 .defeat .result-text {
   background: linear-gradient(45deg, #ef4444, #dc2626);
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   text-shadow: 0 0 40px rgba(239, 68, 68, 0.5);
 }
 
 @keyframes resultPulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.05); }
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
 }
 
 .result-details {

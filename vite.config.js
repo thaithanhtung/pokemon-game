@@ -15,4 +15,18 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url))
     },
   },
+  optimizeDeps: {
+    include: ['vue', 'vue-router', 'pinia', '@babylonjs/core', '@babylonjs/gui', '@babylonjs/loaders', '@babylonjs/materials'],
+    exclude: []
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor': ['vue', 'vue-router', 'pinia'],
+          'babylon': ['@babylonjs/core', '@babylonjs/gui', '@babylonjs/loaders', '@babylonjs/materials']
+        }
+      }
+    }
+  }
 })

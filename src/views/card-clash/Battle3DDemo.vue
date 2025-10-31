@@ -59,7 +59,48 @@
         @pokemon-faint="onPokemonFaint"
         @battle-end="onBattleEnd"
         @skill-executed="onSkillExecuted"
+        @request-switch="showVoluntarySwitch"
       />
+
+      <!-- Pokemon Switch UI -->
+      <div v-if="battleActive && (currentBattle?.requiresSwitch || showSwitchUI)" class="pokemon-switch-overlay">
+        <div class="switch-container">
+          <h2>{{ currentBattle?.requiresSwitch ? 'Choose a Pokemon to send out!' : 'Switch Pokemon' }}</h2>
+          <button 
+            v-if="!currentBattle?.requiresSwitch" 
+            @click="showSwitchUI = false"
+            class="close-switch-btn"
+          >
+            ✕
+          </button>
+          <div class="bench-pokemon-grid">
+            <div
+              v-for="pokemon in currentBattle.player.bench"
+              :key="pokemon.uid"
+              class="pokemon-card-switch"
+              @click="switchPokemon(pokemon)"
+            >
+              <img 
+                :src="getPokemonSprite(pokemon)" 
+                :alt="pokemon.name"
+                @error="(e) => { 
+                  console.error(`Failed to load image for ${pokemon.name}`);
+                  e.target.src = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/132.png'
+                }"
+              />
+              <h4>{{ pokemon.name }}</h4>
+              <div class="pokemon-stats">
+                <span class="hp">HP: {{ pokemon.hp }}/{{ pokemon.maxHp || pokemon.hp }}</span>
+                <span class="types">
+                  <span v-for="type in pokemon.types" :key="type" class="type" :class="type.toLowerCase()">
+                    {{ type }}
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div v-else class="pre-battle">
         <!-- Loading State -->
@@ -146,19 +187,46 @@ const toast = useToast();
 const battleActive = ref(false);
 const showSoundPanel = ref(false);
 const isLoading = ref(true);
+const showSwitchUI = ref(false);
 
 const soundEnabled = computed(() => sound.enabled.value);
 
 // Get battle data from store - same as regular Battle page
 const currentBattle = computed(() => cardBattleStore.currentBattle);
 
+// Helper function to get Pokemon sprite URL
+const getPokemonSprite = (pokemon: any) => {
+  const id = pokemon.pokemonId || pokemon.id?.replace('pokemon_', '') || '1';
+  console.log(`Getting sprite for ${pokemon.name}, ID: ${id}`);
+  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${id}.png`;
+};
+
 // Convert battle card to Pokemon format for 3D rendering
 const cardToBattlePokemon = (card: any): any => {
   // The card from battle state is a BattleCard with extended properties
+  // Extract Pokemon ID from various possible fields
+  let pokemonId = card.pokemonId;
+  
+  // If pokemonId is not found, try to extract from id field
+  if (!pokemonId && card.id) {
+    // If id is like "pokemon_25", extract the number
+    const match = card.id.match(/pokemon_(\d+)/);
+    if (match) {
+      pokemonId = parseInt(match[1]);
+    }
+  }
+  
+  // Fallback to a default if still not found
+  pokemonId = pokemonId || 25; // Default to Pikachu instead of 1
+  
+  console.log(`Converting card ${card.name} to battle Pokemon, ID: ${pokemonId}`, card);
+  
   return {
-    id: card.pokemonId || 1,
+    id: pokemonId,
+    pokemonId: pokemonId,
     name: card.name,
     types: card.types || [],
+    pokemonType: card.types?.[0] || card.pokemonType,
     stats: {
       hp: card.hp || card.maxHp || 100,
       attack: card.attack || 50,
@@ -204,6 +272,24 @@ watch(() => currentBattle.value?.ended, (ended) => {
   }
 });
 
+// Watch for Pokemon switching requirement
+watch(() => currentBattle.value?.requiresSwitch, (requiresSwitch) => {
+  if (requiresSwitch) {
+    console.log('Pokemon switch required!');
+    console.log('Available bench Pokemon:', currentBattle.value?.player?.bench);
+    currentBattle.value?.player?.bench?.forEach((pokemon, index) => {
+      console.log(`Bench ${index}:`, {
+        name: pokemon.name,
+        id: pokemon.id,
+        pokemonId: pokemon.pokemonId,
+        uid: pokemon.uid,
+        hp: pokemon.hp,
+        maxHp: pokemon.maxHp
+      });
+    });
+  }
+});
+
 const toggleSound = () => {
   sound.toggleSound();
   if (sound.enabled.value) {
@@ -216,14 +302,38 @@ const playSound = (soundName: string) => {
 };
 
 const startBattle = async () => {
-  battleActive.value = true;
-  battle3DStore.transitionToPhase('preparation');
-  sound.play('battle-start');
+  // Initialize player first
+  await cardBattleStore.initializePlayer();
+  
+  // Check if player has any cards
+  if (!playerStore.player.cards || playerStore.player.cards.length === 0) {
+    console.log('No cards found, initializing starter pack');
+    cardBattleStore.giveStarterPack();
+  }
+  
+  // Check if player has active deck
+  if (!playerStore.player.activeDeck || playerStore.player.decks.length === 0) {
+    toast.warning('No Active Deck', 'Creating a starter deck for you...');
+    cardBattleStore.createStarterDeck();
+  }
 
-  // Start battle music after a short delay
-  setTimeout(() => {
-    sound.fadeIn('shop-music', 2000, 0.3);
-  }, 1000);
+  // Start the actual battle
+  cardBattleStore.startBattle('pvp');
+  
+  // Only activate battle UI if battle was successfully started
+  if (cardBattleStore.currentBattle) {
+    battleActive.value = true;
+    battle3DStore.transitionToPhase('preparation');
+    sound.play('battle-start');
+    toast.info('Battle Started!', 'Good luck!');
+
+    // Start battle music after a short delay
+    setTimeout(() => {
+      sound.fadeIn('shop-music', 2000, 0.3);
+    }, 1000);
+  } else {
+    toast.error('Battle Failed', 'Could not start battle. Please try again.');
+  }
 };
 
 const onBattleStart = () => {
@@ -272,42 +382,41 @@ const onBattleEnd = (result: 'victory' | 'defeat') => {
   }, 2000);
 };
 
+const switchPokemon = (pokemon: any) => {
+  console.log('Switching to Pokemon:', pokemon.name);
+  console.log('Pokemon data:', pokemon); // Debug log
+  cardBattleStore.executePlayerAction({
+    type: 'switch',
+    pokemon: pokemon
+  });
+  sound.play('button-click');
+  showSwitchUI.value = false; // Close the UI after switching
+};
+
+const showVoluntarySwitch = () => {
+  if (currentBattle.value?.player?.bench?.length > 0) {
+    showSwitchUI.value = true;
+    sound.play('button-click');
+  } else {
+    toast.warning('No Pokemon Available', 'You have no Pokemon on your bench to switch to!');
+  }
+};
+
 onMounted(async () => {
   // Enable sound effects for the battle
   battle3DStore.toggleAudio(true);
 
   // Show sound panel in demo mode
-  showSoundPanel.value = true;
+  showSoundPanel.value = false; // Hide by default
 
   // Initialize player if not already done
   await cardBattleStore.initializePlayer();
-  
-  // Check if player has any cards
-  if (!playerStore.player.cards || playerStore.player.cards.length === 0) {
-    console.log('No cards found, initializing starter pack');
-    cardBattleStore.giveStarterPack();
-  }
   
   // Log current cards for debugging
   console.log('Current player cards:', playerStore.player.cards?.length || 0);
   console.log('Pokemon cards:', playerStore.player.cards?.filter(c => c.type === 'pokemon').map(c => c.name));
   
-  // Check if player has active deck
-  if (!playerStore.player.activeDeck || playerStore.player.decks.length === 0) {
-    toast.warning('No Active Deck', 'Creating a starter deck for you...');
-    cardBattleStore.createStarterDeck();
-  }
-
-  // Start battle
-  cardBattleStore.startBattle('pvp');
-  
-  // Only show toast if battle was successfully started
-  if (cardBattleStore.currentBattle) {
-    toast.info('Battle Started!', 'Good luck!');
-  } else {
-    toast.error('Battle Failed', 'Could not start battle. Please try again.');
-  }
-
+  // Don't start battle automatically - wait for user to click Start Battle
   isLoading.value = false;
 });
 
@@ -694,5 +803,130 @@ onUnmounted(() => {
 .opponent-status .active-pokemon,
 .opponent-status .bench-pokemon {
   justify-content: flex-end;
+}
+
+/* Pokemon Switch Overlay */
+.pokemon-switch-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.switch-container {
+  background: rgba(20, 20, 40, 0.95);
+  border: 3px solid rgba(255, 215, 0, 0.8);
+  border-radius: 20px;
+  padding: 30px;
+  max-width: 800px;
+  width: 90%;
+  box-shadow: 0 0 30px rgba(255, 215, 0, 0.5);
+}
+
+.switch-container {
+  position: relative;
+}
+
+.switch-container h2 {
+  text-align: center;
+  color: #ffd700;
+  font-size: 2rem;
+  margin-bottom: 25px;
+  text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+}
+
+.close-switch-btn {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  width: 40px;
+  height: 40px;
+  background: rgba(239, 68, 68, 0.2);
+  border: 2px solid rgba(239, 68, 68, 0.5);
+  border-radius: 50%;
+  color: #fca5a5;
+  font-size: 1.5rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-switch-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.8);
+  color: #fee2e2;
+  transform: scale(1.1);
+}
+
+.bench-pokemon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 20px;
+  justify-items: center;
+}
+
+.pokemon-card-switch {
+  background: linear-gradient(135deg, #2a2a4a 0%, #1a1a3a 100%);
+  border: 2px solid rgba(255, 215, 0, 0.3);
+  border-radius: 15px;
+  padding: 15px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  width: 100%;
+  max-width: 180px;
+  text-align: center;
+}
+
+.pokemon-card-switch:hover {
+  transform: translateY(-5px);
+  border-color: rgba(255, 215, 0, 0.8);
+  box-shadow: 0 10px 25px rgba(255, 215, 0, 0.3);
+}
+
+.pokemon-card-switch img {
+  width: 80px;
+  height: 80px;
+  image-rendering: pixelated;
+  margin-bottom: 10px;
+}
+
+.pokemon-card-switch h4 {
+  color: #ffd700;
+  margin: 0 0 10px 0;
+  font-size: 1.1rem;
+}
+
+.pokemon-card-switch .pokemon-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.9rem;
+}
+
+.pokemon-card-switch .hp {
+  color: #10b981;
+}
+
+.pokemon-card-switch .types {
+  display: flex;
+  gap: 5px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.pokemon-card-switch .type {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: bold;
+  text-transform: uppercase;
 }
 </style>

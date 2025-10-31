@@ -1,11 +1,13 @@
 # Pokemon Farm Game Requirements
 
 ## Overview
-Transform the existing Pokemon project into a farming and creature-raising game with 3D graphics using Babylon.js, maintaining the visual style of the /pokedex page.
+
+Transform the existing Pokemon project into a farming and creature-raising game with 3D graphics using Babylon.js, maintaining the visual style of the /pokedex page. use tailwind css
 
 ## Core Features
 
 ### 1. Farming System
+
 - [x] Plant and grow various crops
 - [x] Harvest crops for resources
 - [x] Crop growth stages with timers
@@ -13,12 +15,14 @@ Transform the existing Pokemon project into a farming and creature-raising game 
 - [x] Weather system affecting crop growth
 
 ### 2. Pokemon Farm Building
+
 - [x] Build various farm structures (barns, coops, fields)
 - [ ] Upgrade buildings for better efficiency
 - [ ] Storage buildings for crops and items
 - [x] Pokemon habitats for different types
 
 ### 3. Pokemon Raising & Training
+
 - [x] Catch/acquire Pokemon for the farm
 - [x] Feed and care for Pokemon (happiness system)
 - [ ] Train Pokemon to increase stats
@@ -26,24 +30,28 @@ Transform the existing Pokemon project into a farming and creature-raising game 
 - [ ] Evolution system based on care and training
 
 ### 4. Interaction System
+
 - [x] Pet and play with Pokemon
 - [x] Feed Pokemon with crops/items
 - [x] Pokemon mood and happiness indicators
 - [ ] Pokemon follow player around farm
 
 ### 5. Battle System
+
 - [ ] Turn-based battles (existing system)
 - [ ] Wild Pokemon encounters
 - [ ] Trainer battles
 - [ ] Battle rewards (items, Pokemon, currency)
 
 ### 6. Breeding System
+
 - [ ] Breed compatible Pokemon
 - [ ] Egg incubation system
 - [ ] Inherit traits from parents
 - [ ] Rare Pokemon through breeding
 
 ### 7. Exploration
+
 - [ ] 3D explorable map with Babylon.js
 - [ ] Different biomes/areas to explore
 - [ ] Find wild Pokemon
@@ -51,6 +59,7 @@ Transform the existing Pokemon project into a farming and creature-raising game 
 - [ ] Unlock new areas through progression
 
 ### 8. Firebase Data Structure
+
 - [x] User profile and authentication
 - [x] Farm layout and buildings
 - [x] Crop data and growth timers
@@ -62,12 +71,14 @@ Transform the existing Pokemon project into a farming and creature-raising game 
 ## Technical Requirements
 
 ### Visual Style
+
 - Maintain the light, clean aesthetic of the /pokedex page
 - Soft colors and gradients
 - Modern, minimalist UI
 - Smooth animations and transitions
 
 ### Babylon.js Implementation
+
 - [ ] 3D farm environment
 - [ ] Pokemon 3D models or sprites in 3D space
 - [ ] Camera controls (orbital, follow)
@@ -76,6 +87,7 @@ Transform the existing Pokemon project into a farming and creature-raising game 
 - [ ] Particle effects for actions
 
 ### Firebase Structure
+
 ```
 users/
   {userId}/
@@ -86,7 +98,7 @@ users/
       - currency
       - lastLogin
       - createdAt
-    
+
     farm/
       buildings/
         {buildingId}/
@@ -94,7 +106,7 @@ users/
           - level
           - position
           - constructedAt
-      
+
       crops/
         {cropId}/
           - type
@@ -103,11 +115,11 @@ users/
           - position
           - wateredAt
           - fertilized
-      
+
       layout/
         - gridSize
         - tiles[]
-    
+
     pokemon/
       {pokemonId}/
         - species
@@ -119,24 +131,24 @@ users/
         - position
         - caught/hatchedAt
         - parentIds[]
-    
+
     inventory/
       items/
         {itemId}/
           - type
           - quantity
-      
+
       seeds/
         {seedId}/
           - type
           - quantity
-    
+
     quests/
       active/
         {questId}/
           - progress
           - startedAt
-      
+
       completed/
         {questId}/
           - completedAt
@@ -144,6 +156,7 @@ users/
 ```
 
 ## Implementation Order
+
 1. [x] Set up Babylon.js environment
 2. [x] Create basic 3D farm scene
 3. [x] Implement farming system (plant/harvest)
@@ -156,6 +169,7 @@ users/
 10. [ ] Polish UI and animations
 
 ## Completion Checklist
+
 - [x] Babylon.js integrated and working
 - [x] 3D farm environment created
 - [x] Farming system functional

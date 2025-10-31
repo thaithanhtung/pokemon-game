@@ -114,13 +114,13 @@
           <div v-if="isComboSkill(skill)" class="effect-indicator combo">
             <i class="fas fa-link"></i>
           </div>
-          <div v-if="skill.effects.some(e => e.type === 'heal')" class="effect-indicator heal">
+          <div v-if="skill.effects?.some(e => e.type === 'heal')" class="effect-indicator heal">
             <i class="fas fa-heart"></i>
           </div>
-          <div v-if="skill.effects.some(e => e.type === 'buff')" class="effect-indicator buff">
+          <div v-if="skill.effects?.some(e => e.type === 'buff')" class="effect-indicator buff">
             <i class="fas fa-arrow-up"></i>
           </div>
-          <div v-if="skill.effects.some(e => e.type === 'status')" class="effect-indicator status">
+          <div v-if="skill.effects?.some(e => e.type === 'status')" class="effect-indicator status">
             <i class="fas fa-dizzy"></i>
           </div>
         </div>
@@ -159,7 +159,7 @@
           </div>
         </div>
 
-        <div v-if="hoveredSkill.effects.length > 0" class="tooltip-effects">
+        <div v-if="hoveredSkill.effects?.length > 0" class="tooltip-effects">
           <h4>Effects:</h4>
           <div v-for="(effect, index) in hoveredSkill.effects" :key="index" class="effect-item">
             {{ getEffectDescription(effect) }}
@@ -209,10 +209,17 @@ const comboTimer = ref<number | null>(null);
 
 // Available skills (not on cooldown)
 const availableSkills = computed(() => {
-  return props.skills.map(skill => ({
+  console.log('SkillManager - Received skills:', props.skills);
+  console.log('SkillManager - Current energy:', props.currentEnergy);
+  console.log('SkillManager - Is player turn:', props.isPlayerTurn);
+  
+  const mapped = props.skills.map(skill => ({
     ...skill,
     currentCooldown: skill.currentCooldown || 0
   }));
+  
+  console.log('SkillManager - Available skills after mapping:', mapped);
+  return mapped;
 });
 
 // Energy percentage for visual bar

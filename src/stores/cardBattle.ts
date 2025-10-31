@@ -154,7 +154,7 @@ const STATUS_EFFECTS: Record<string, StatusEffect> = {
 };
 
 export const useCardBattleStore = defineStore('cardBattle', {
-  state: (): CardBattleState => ({
+  state: (): any => ({
     // Firebase integration
     isOnline: true,
     syncEnabled: true,
@@ -177,12 +177,24 @@ export const useCardBattleStore = defineStore('cardBattle', {
       if (!playerStore.cardDatabase) return null;
       return playerStore.cardDatabase.find(card => card.id === cardId);
     },
+    
+    getPlayerActiveSkills: (state) => {
+      if (!state.currentBattle?.player?.activePokemon?.skills) return [];
+      const skills = state.currentBattle.player.activePokemon.skills;
+      console.log('Getter - Player active skills:', skills);
+      return skills;
+    },
 
     getPlayerDeck: () => {
       const playerStore = usePlayerStore();
       if (!playerStore.player?.activeDeck) return [];
       const deck = playerStore.player.decks?.find(d => d.id === playerStore.player.activeDeck);
-      return deck ? deck.cards : [];
+      if (!deck) return [];
+      
+      // Map deck card UIDs to actual card objects
+      return deck.cards
+        .map(cardUid => playerStore.player.cards.find(c => c.uid === cardUid))
+        .filter(Boolean);
     },
 
     calculateTypeMultiplier: () => (attackerType, defenderType) => {
@@ -385,6 +397,9 @@ export const useCardBattleStore = defineStore('cardBattle', {
         this.createStarterDeck();
       }
 
+      // Migrate existing Pokemon cards to ensure they have proper skills
+      playerStore.migrateExistingPokemonCards();
+
       console.log('initializePlayer done');
     },
 
@@ -417,53 +432,9 @@ export const useCardBattleStore = defineStore('cardBattle', {
     },
 
     generatePokemonSkills(pokemon) {
-      const skills = [];
-      const types = pokemon.types;
-
-      // Basic attack
-      skills.push({
-        name: 'Tackle',
-        damage: 20,
-        energy: 1,
-        description: 'A basic physical attack',
-      });
-
-      // Type-specific attack
-      if (types.includes('fire')) {
-        skills.push({
-          name: 'Ember',
-          damage: 30,
-          energy: 2,
-          type: 'fire',
-          description: 'May inflict burn',
-        });
-      } else if (types.includes('water')) {
-        skills.push({
-          name: 'Water Gun',
-          damage: 30,
-          energy: 2,
-          type: 'water',
-          description: 'A stream of water',
-        });
-      } else if (types.includes('grass')) {
-        skills.push({
-          name: 'Vine Whip',
-          damage: 30,
-          energy: 2,
-          type: 'grass',
-          description: 'Strike with vines',
-        });
-      } else if (types.includes('electric')) {
-        skills.push({
-          name: 'Thunder Shock',
-          damage: 30,
-          energy: 2,
-          type: 'electric',
-          description: 'May cause paralysis',
-        });
-      }
-
-      return skills;
+      // Use the same skill generation from player store
+      const playerStore = usePlayerStore();
+      return playerStore.generatePokemonSkills(pokemon);
     },
 
     generateSkillCards() {
@@ -544,21 +515,26 @@ export const useCardBattleStore = defineStore('cardBattle', {
 
     giveStarterPack() {
       const playerStore = usePlayerStore();
-      
+
       // Ensure card database is generated
       if (!playerStore.cardDatabase || playerStore.cardDatabase.length === 0) {
         console.log('Card database not initialized, generating...');
         playerStore.generateCardDatabase();
       }
-      
+
       const starterCards = [
-        'pokemon_1',
-        'pokemon_4',
-        'pokemon_7', // Starters
-        'pokemon_25', // Pikachu
+        'pokemon_1',   // Bulbasaur
+        'pokemon_4',   // Charmander
+        'pokemon_7',   // Squirtle
+        'pokemon_25',  // Pikachu
+        'pokemon_16',  // Pidgey
+        'pokemon_19',  // Rattata
+        'pokemon_10',  // Caterpie
+        'pokemon_13',  // Weedle
         'skill_heal',
         'skill_heal',
         'skill_boost',
+        'skill_shield',
         'item_potion',
         'item_potion',
         'item_potion',
@@ -569,29 +545,35 @@ export const useCardBattleStore = defineStore('cardBattle', {
       starterCards.forEach(cardId => {
         playerStore.addCardToCollection(cardId);
       });
-      
+
       console.log('Starter pack given, player now has', playerStore.player.cards.length, 'cards');
     },
 
     createStarterDeck() {
       const playerStore = usePlayerStore();
+      
+      // Get actual card UIDs from player's collection
+      const pokemonCards = playerStore.player.cards
+        .filter(c => c.type === 'pokemon')
+        .slice(0, 8) // Get first 8 Pokemon
+        .map(c => c.uid);
+      
+      const skillCards = playerStore.player.cards
+        .filter(c => c.type === 'skill')
+        .slice(0, 4)
+        .map(c => c.uid);
+      
+      const itemCards = playerStore.player.cards
+        .filter(c => c.type === 'item')
+        .slice(0, 4)
+        .map(c => c.uid);
+      
       const deck = {
         id: 'deck_1',
         name: 'Starter Deck',
-        cards: [
-          'pokemon_1',
-          'pokemon_4',
-          'pokemon_7',
-          'pokemon_25',
-          'pokemon_16',
-          'pokemon_19',
-          'skill_heal',
-          'skill_heal',
-          'skill_boost',
-          'skill_shield',
-          'item_potion',
-          'item_energy',
-        ],
+        cards: [...pokemonCards, ...skillCards, ...itemCards],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
       };
 
       if (!playerStore.player.decks) {
@@ -628,30 +610,36 @@ export const useCardBattleStore = defineStore('cardBattle', {
 
     startBattle(mode, opponentId = null) {
       const playerStore = usePlayerStore();
-      
+
       // Ensure player has cards and a deck
       if (!playerStore.player?.cards || playerStore.player.cards.length === 0) {
         console.log('No cards in collection, giving starter pack');
         this.giveStarterPack();
       }
-      
+
       if (!playerStore.player?.decks || playerStore.player.decks.length === 0) {
         console.log('No decks found, creating starter deck');
         this.createStarterDeck();
       }
       
-      // Get player deck
-      let playerDeck = this.getPlayerDeck
-        .map(cardId => playerStore.player?.cards?.find(c => c.id === cardId))
-        .filter(Boolean);
+      // Force migrate existing cards to ensure they have skills
+      console.log('Running skill migration before battle...');
+      playerStore.migrateExistingPokemonCards();
+
+      // Get player deck - getPlayerDeck already returns card objects
+      let playerDeck = this.getPlayerDeck;
 
       // If still no deck or empty deck, create a basic one from available cards
       if (playerDeck.length === 0) {
         console.log('Active deck is empty, creating temporary deck from available cards');
-        const availablePokemon = (playerStore.player?.cards || []).filter(c => c.type === 'pokemon').slice(0, 6);
-        const availableOther = (playerStore.player?.cards || []).filter(c => c.type !== 'pokemon').slice(0, 6);
+        const availablePokemon = (playerStore.player?.cards || [])
+          .filter(c => c.type === 'pokemon')
+          .slice(0, 6);
+        const availableOther = (playerStore.player?.cards || [])
+          .filter(c => c.type !== 'pokemon')
+          .slice(0, 6);
         playerDeck = [...availablePokemon, ...availableOther];
-        
+
         // If still no Pokemon cards, generate some basic ones
         if (availablePokemon.length === 0) {
           console.error('No Pokemon cards available, cannot start battle');
@@ -659,8 +647,74 @@ export const useCardBattleStore = defineStore('cardBattle', {
         }
       }
 
-      const pokemonCards = playerDeck.filter(c => c.type === 'pokemon');
-      
+      const pokemonCards = playerDeck.filter(c => c.type === 'pokemon').map(card => {
+        console.log('Loading Pokemon card for battle:', card.name, 'Skills:', card.skills);
+        
+        // If Pokemon has no skills or only one skill, generate them
+        let skills = card.skills || [];
+        console.log(`${card.name} current skills:`, skills);
+        console.log(`${card.name} skills count: ${skills.length}`);
+        
+        if (skills.length <= 1) {
+          console.log(`${card.name} has ${skills.length} skills, regenerating...`);
+          console.log(`Card data:`, card);
+          console.log(`Card pokemonType: ${card.pokemonType}, types array:`, card.types);
+          
+          // Use types array if available, otherwise fall back to single pokemonType
+          let types = card.types || [card.pokemonType || 'normal'];
+          
+          // If we still only have one type, try to look up the Pokemon's full data
+          if (types.length === 1 && card.pokemonId) {
+            const fullPokemon = playerStore.cardDatabase.find(c => c.pokemonId === card.pokemonId);
+            if (fullPokemon && fullPokemon.types && fullPokemon.types.length > 1) {
+              types = [...fullPokemon.types];
+              console.log(`Found full types for ${card.name}: ${types}`);
+            }
+          }
+          
+          const pokemonData = {
+            id: card.pokemonId || 1,
+            name: card.name,
+            types: types
+          };
+          console.log(`Pokemon data for skill generation:`, pokemonData);
+          skills = playerStore.generatePokemonSkills(pokemonData);
+          console.log(`Generated ${skills.length} skills for ${card.name}:`, skills.map(s => s.name));
+          
+          // If still only one skill, force add more skills
+          if (skills.length <= 1) {
+            console.warn(`Still only ${skills.length} skills for ${card.name}, forcing additional skills`);
+            // Add Quick Attack if not present
+            if (!skills.some(s => s.id === 'quick_attack')) {
+              const quickAttack = playerStore.getSkillById('quick_attack');
+              if (quickAttack) skills.push({...quickAttack});
+            }
+            // Add a type-specific move
+            const typeSkills = playerStore.getSkillsByType(types[0]);
+            const extraSkill = typeSkills.find(s => !skills.some(existing => existing.id === s.id) && s.energy <= 3);
+            if (extraSkill) skills.push({...extraSkill});
+          }
+        }
+        
+        // Validate skills before creating battle card
+        const validSkills = skills.filter(s => s && s.id && s.name).map(s => ({...s}));
+        console.log(`Valid skills for ${card.name}: ${validSkills.length}`);
+        
+        const battleCard = {
+          ...card,
+          hp: card.hp || 100,
+          maxHp: card.maxHp || card.hp || 100,
+          skills: validSkills, // Use validated skills
+          atk: card.atk || 50,
+          def: card.def || 40,
+          spd: card.spd || 45
+        };
+        
+        console.log(`Battle card created for ${battleCard.name} with ${battleCard.skills.length} skills`);
+        console.log(`  Skills:`, battleCard.skills.map(s => ({ id: s.id, name: s.name, energy: s.energy })));
+        return battleCard;
+      });
+
       // Ensure we have at least one Pokemon
       if (pokemonCards.length === 0) {
         console.error('No Pokemon cards in deck, cannot start battle');
@@ -684,15 +738,61 @@ export const useCardBattleStore = defineStore('cardBattle', {
         turnCount: 0,
       };
 
+      // Debug: Log all Pokemon and their skills
+      console.log('Battle Start - Active Pokemon:', this.currentBattle.player.activePokemon.name);
+      console.log('  Skills array:', this.currentBattle.player.activePokemon.skills);
+      console.log('  Skills count:', this.currentBattle.player.activePokemon.skills?.length);
+      console.log('  Full active Pokemon data:', this.currentBattle.player.activePokemon);
+      
+      console.log('Battle Start - Bench Pokemon:');
+      this.currentBattle.player.bench.forEach((p, i) => {
+        console.log(`  Bench ${i}: ${p.name}`);
+        console.log(`    Skills:`, p.skills);
+        console.log(`    Skills count:`, p.skills?.length);
+      });
+
       this.battleLog = [];
       this.addBattleLog('Battle started!');
     },
 
     generateOpponent(mode, opponentId) {
-      if (mode === 'story') {
+      if (mode === 'story' || mode === 'pvp') {
         const opponent = this.aiOpponents[0]; // Start with easy
         const deck = this.generateAIDeck(opponent.difficulty);
-        const pokemonCards = deck.filter(c => c.type === 'pokemon');
+        const pokemonCards = deck.filter(c => c.type === 'pokemon').map(card => {
+          console.log('Loading AI Pokemon:', card.name, 'Skills:', card.skills);
+          
+          // If Pokemon has no skills or only one skill, generate them
+          let skills = card.skills || [];
+          if (skills.length <= 1) {
+            console.log(`No skills for AI ${card.name}, generating...`);
+            
+            // Use types array if available, otherwise fall back to single pokemonType
+            let types = card.types || [card.pokemonType || 'normal'];
+            
+            const pokemonData = {
+              id: card.pokemonId || 1,
+              name: card.name,
+              types: types
+            };
+            const playerStore = usePlayerStore();
+            skills = playerStore.generatePokemonSkills(pokemonData);
+            console.log(`Generated ${skills.length} skills for AI ${card.name}`);
+          }
+          
+          const battleCard = {
+            ...card,
+            hp: card.hp || 100,
+            maxHp: card.maxHp || card.hp || 100,
+            skills: skills.map(s => ({...s})), // Deep copy skills to prevent mutation
+            atk: card.atk || 50,
+            def: card.def || 40,
+            spd: card.spd || 45
+          };
+          
+          console.log(`AI battle card created for ${battleCard.name} with ${battleCard.skills.length} skills`);
+          return battleCard;
+        });
 
         return {
           ...opponent,
@@ -704,7 +804,7 @@ export const useCardBattleStore = defineStore('cardBattle', {
         };
       }
 
-      // PvP placeholder
+      // Real PvP would load opponent data
       return null;
     },
 
@@ -743,7 +843,26 @@ export const useCardBattleStore = defineStore('cardBattle', {
     },
 
     executePlayerAction(action) {
-      if (this.currentBattle.currentTurn !== 'player') return;
+      console.log('=== EXECUTE PLAYER ACTION START ===');
+      console.log('Action:', action);
+      
+      if (!this.currentBattle) {
+        console.error('No current battle!');
+        return;
+      }
+      
+      // Check if a Pokemon switch is required
+      if (this.currentBattle.requiresSwitch) {
+        if (action.type !== 'switch') {
+          this.addBattleLog('You must choose a Pokemon to send out!');
+          return;
+        }
+      }
+      
+      if (this.currentBattle.currentTurn !== 'player') {
+        console.log('Not player turn, skipping');
+        return;
+      }
 
       const battle = this.currentBattle;
 
@@ -759,41 +878,153 @@ export const useCardBattleStore = defineStore('cardBattle', {
           break;
         case 'switch':
           this.switchPokemon('player', action.pokemon);
+          // Don't return early - switching counts as a turn
           break;
       }
 
       this.checkBattleEnd();
 
-      if (!this.currentBattle.ended) {
-        this.currentBattle.currentTurn = 'opponent';
-        setTimeout(() => this.executeAITurn(), 1000);
+      // SIMPLIFIED AI TURN - Execute immediately after player
+      // Switch action also triggers AI turn (switching costs a turn)
+      if (!this.currentBattle.ended && this.currentBattle.opponent.activePokemon.hp > 0) {
+        console.log('Player turn complete, AI will counter-attack');
+        
+        // Execute AI attack immediately
+        this.aiCounterAttack();
       }
+    },
+    
+    // New simplified AI counter-attack method
+    aiCounterAttack() {
+      console.log('=== AI COUNTER ATTACK ===');
+      
+      if (!this.currentBattle || this.currentBattle.ended) {
+        console.log('No battle or battle ended');
+        return;
+      }
+      
+      const ai = this.currentBattle.opponent;
+      const player = this.currentBattle.player;
+      
+      if (!ai.activePokemon || ai.activePokemon.hp <= 0) {
+        console.log('AI Pokemon fainted');
+        return;
+      }
+      
+      if (!player.activePokemon || player.activePokemon.hp <= 0) {
+        console.log('Player Pokemon fainted');
+        return;
+      }
+      
+      // Select a skill for AI to use
+      const availableSkills = ai.activePokemon.skills || [];
+      console.log('AI available skills:', availableSkills.map(s => s.name));
+      
+      let selectedSkill = null;
+      if (availableSkills.length > 0) {
+        // Filter skills by energy cost
+        const affordableSkills = availableSkills.filter(skill => 
+          (skill.energy || 1) <= ai.energy
+        );
+        
+        if (affordableSkills.length > 0) {
+          // Pick a random affordable skill
+          selectedSkill = affordableSkills[Math.floor(Math.random() * affordableSkills.length)];
+        } else {
+          // Use basic attack if no affordable skills
+          selectedSkill = availableSkills.find(s => s.id === 'tackle') || availableSkills[0];
+        }
+      }
+      
+      // Fallback to basic attack
+      if (!selectedSkill) {
+        selectedSkill = {
+          id: 'tackle',
+          name: 'Tackle',
+          power: 40,
+          damage: 40,
+          energy: 1,
+          element: 'normal'
+        };
+      }
+      
+      console.log('AI selected skill:', selectedSkill.name);
+      
+      // Use the existing executeAttack method for consistent damage calculation
+      this.executeAttack('opponent', selectedSkill);
+      
+      // Check if player Pokemon fainted
+      this.checkBattleEnd();
+      
+      // Restore energy for both sides
+      this.currentBattle.player.energy = Math.min(5, this.currentBattle.player.energy + 2);
+      this.currentBattle.opponent.energy = Math.min(5, this.currentBattle.opponent.energy + 2);
+      
+      // Set turn back to player
+      this.currentBattle.currentTurn = 'player';
+      this.currentBattle.turn++;
+      
+      console.log('AI attack complete, turn:', this.currentBattle.turn);
     },
 
     executeAttack(attacker, skill) {
+      console.log(`executeAttack called by ${attacker} with skill:`, skill);
       const battle = this.currentBattle;
+      if (!battle) {
+        console.error('No current battle in executeAttack');
+        return;
+      }
+      
       const source = battle[attacker];
       const target = battle[attacker === 'player' ? 'opponent' : 'player'];
-
-      if (source.energy < skill.energy) {
-        this.addBattleLog(`Not enough energy!`);
+      
+      if (!source || !target) {
+        console.error('Invalid source or target', { source, target });
         return;
       }
 
-      source.energy -= skill.energy;
+      // Ensure skill has required properties
+      if (!skill || !skill.name) {
+        console.error('Invalid skill object:', skill);
+        return;
+      }
+      
+      const skillEnergy = skill.energy || 1;
+      console.log(`${attacker} attempting attack with ${skill.name}, energy: ${source.energy}/${skillEnergy}`);
+      
+      if (source.energy < skillEnergy) {
+        this.addBattleLog(`${attacker === 'player' ? 'You don\'t' : 'Opponent doesn\'t'} have enough energy!`);
+        console.log('Attack failed - not enough energy');
+        return;
+      }
 
-      const typeMultiplier = skill.type
-        ? this.calculateTypeMultiplier(skill.type, target.activePokemon.pokemonType)
+      source.energy -= skillEnergy;
+
+      const typeMultiplier = skill.element
+        ? this.calculateTypeMultiplier(skill.element, target.activePokemon.pokemonType)
         : 1;
 
-      const damage = Math.floor(
-        (skill.damage + source.activePokemon.atk) * typeMultiplier - target.activePokemon.def
-      );
+      const baseDamage = skill.damage || skill.power || 50;
+      const attackStat = source.activePokemon.atk || 50;
+      const defenseStat = target.activePokemon.def || 40;
+      
+      // Use balanced damage formula to prevent one-hit KOs
+      let damage = Math.floor((baseDamage * 0.4 + (attackStat - defenseStat) * 0.5) * typeMultiplier);
+      
+      // Ensure minimum damage
+      damage = Math.max(5, damage);
+      
+      // Cap damage to prevent one-hit KOs (max 40% of target's max HP)
+      const maxDamage = Math.floor((target.activePokemon.maxHp || target.activePokemon.hp || 100) * 0.4);
+      damage = Math.min(damage, maxDamage);
+      
+      console.log(`Damage calculation: base=${baseDamage}, atk=${attackStat}, def=${defenseStat}, type=${typeMultiplier}, final=${damage}`);
 
-      target.activePokemon.hp -= Math.max(1, damage);
+      target.activePokemon.hp -= damage;
       if (target.activePokemon.hp < 0) target.activePokemon.hp = 0;
 
       this.addBattleLog(`${source.activePokemon.name} used ${skill.name} for ${damage} damage!`);
+      console.log(`${attacker} dealt ${damage} damage. Target HP: ${target.activePokemon.hp}/${target.activePokemon.maxHp}`);
 
       if (typeMultiplier > 1) {
         this.addBattleLog('Super effective!');
@@ -803,7 +1034,7 @@ export const useCardBattleStore = defineStore('cardBattle', {
 
       // Trigger animations on attack/hit, carry element type if any
       const now = Date.now();
-      const elem = skill.type || source.activePokemon.pokemonType || null;
+      const elem = skill.element || source.activePokemon.pokemonType || null;
       source.activePokemon.anim = { type: 'attack', ts: now, element: elem };
       target.activePokemon.anim = { type: 'hit', ts: now, element: elem };
       setTimeout(() => {
@@ -816,24 +1047,10 @@ export const useCardBattleStore = defineStore('cardBattle', {
       }, 600);
     },
 
+    // Keep old executeAITurn for compatibility but redirect to new method
     executeAITurn() {
-      const battle = this.currentBattle;
-      const ai = battle.opponent;
-
-      // Simple AI: always attack with first available skill
-      const skill = ai.activePokemon.skills[0];
-      this.executeAttack('opponent', skill);
-
-      this.checkBattleEnd();
-
-      if (!this.currentBattle.ended) {
-        this.currentBattle.currentTurn = 'player';
-        this.currentBattle.turn++;
-
-        // Restore energy
-        this.currentBattle.player.energy = Math.min(5, this.currentBattle.player.energy + 2);
-        this.currentBattle.opponent.energy = Math.min(5, this.currentBattle.opponent.energy + 2);
-      }
+      console.log('executeAITurn called - redirecting to aiCounterAttack');
+      this.aiCounterAttack();
     },
 
     checkBattleEnd() {
@@ -858,13 +1075,10 @@ export const useCardBattleStore = defineStore('cardBattle', {
         if (battle.player.bench.length === 0) {
           this.endBattle('defeat');
         } else {
-          const nextP = battle.player.bench[0];
-          setTimeout(() => {
-            if (this.currentBattle && this.currentBattle === battle) {
-              battle.player.activePokemon = battle.player.bench.shift();
-              this.addBattleLog(`You sent out ${nextP.name}!`);
-            }
-          }, 700);
+          // Set battle state to require Pokemon switch
+          battle.requiresSwitch = true;
+          battle.switchingSide = 'player';
+          this.addBattleLog(`${battle.player.activePokemon.name} fainted! Choose a Pokemon to send out!`);
         }
       }
     },
@@ -911,6 +1125,20 @@ export const useCardBattleStore = defineStore('cardBattle', {
         message,
         timestamp: Date.now(),
       });
+      console.log('Battle Log:', message);
+    },
+    
+    // Debug function to test AI attack
+    testAIAttack() {
+      console.log('=== TEST AI ATTACK ===');
+      if (!this.currentBattle) {
+        console.error('No battle active');
+        return;
+      }
+      
+      console.log('Forcing AI turn...');
+      this.currentBattle.currentTurn = 'opponent';
+      this.executeAITurn();
     },
 
     switchPokemon(side, pokemon) {
@@ -920,11 +1148,42 @@ export const useCardBattleStore = defineStore('cardBattle', {
       if (index !== -1) {
         const temp = battle.activePokemon;
         battle.activePokemon = battle.bench[index];
-        battle.bench[index] = temp;
+        
+        // Only add fainted Pokemon back to bench if it still has HP
+        if (temp.hp > 0) {
+          battle.bench[index] = temp;
+        } else {
+          // Remove the selected Pokemon from bench since fainted Pokemon was replaced
+          battle.bench.splice(index, 1);
+        }
+
+        console.log('Manual switch - Active Pokemon:', battle.activePokemon.name, 'Skills:', battle.activePokemon.skills);
+        console.log('Manual switch - Benched Pokemon:', temp.name, 'Skills:', temp.skills);
 
         this.addBattleLog(
           `${side === 'player' ? 'You' : 'Opponent'} switched to ${battle.activePokemon.name}!`
         );
+        
+        // Clear the switch requirement flag if this was a forced switch
+        if (this.currentBattle.requiresSwitch && this.currentBattle.switchingSide === side) {
+          this.currentBattle.requiresSwitch = false;
+          this.currentBattle.switchingSide = null;
+          
+          // For forced switches due to fainting, immediately trigger opponent's turn
+          if (side === 'player') {
+            this.currentBattle.currentTurn = 'opponent';
+            // Trigger AI turn after a short delay
+            setTimeout(() => {
+              if (this.currentBattle && !this.currentBattle.ended) {
+                this.aiCounterAttack();
+              }
+            }, 1000);
+          }
+        } else {
+          // This was a voluntary switch - it counts as the player's turn
+          // The AI turn will be triggered by executePlayerAction
+          console.log('Voluntary switch completed');
+        }
       }
     },
 

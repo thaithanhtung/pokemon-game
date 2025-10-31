@@ -428,16 +428,117 @@ export const usePlayerStore = defineStore('player', {
     addCardToCollection(cardId) {
       const card = this.getCardById(cardId);
       if (card) {
-        this.player.cards.push({
+        // Deep copy the card to ensure all properties including skills are copied
+        const newCard = {
           ...card,
           uid: `${cardId}_${Date.now()}_${Math.random()}`,
-          level: card.level || 1, // Ensure level is set, default to 1
-        });
+          level: card.level || 1,
+          skills: card.skills ? [...card.skills] : [], // Ensure skills array is copied
+          types: card.types ? [...card.types] : undefined, // Copy types array if it exists
+        };
+        
+        // Add type and stats if missing
+        if (card.type === 'pokemon' && !newCard.pokemonType && card.pokemonType) {
+          newCard.pokemonType = card.pokemonType;
+        }
+        
+        // Ensure types array exists for Pokemon cards
+        if (card.type === 'pokemon' && !newCard.types) {
+          newCard.types = [newCard.pokemonType || 'normal'];
+        }
+        
+        // If it's a Pokemon card and has no skills, generate them
+        if (card.type === 'pokemon' && (!newCard.skills || newCard.skills.length === 0)) {
+          console.log(`Generating skills for ${newCard.name} as it has none`);
+          // Create a pokemon object with the required structure for skill generation
+          // Use types array if available, otherwise fall back to single pokemonType
+          let types = newCard.types || [newCard.pokemonType || 'normal'];
+          
+          const pokemonData = {
+            id: newCard.pokemonId || parseInt(cardId.split('_')[1]) || 1,
+            name: newCard.name,
+            types: types
+          };
+          console.log('Creating pokemonData for skill generation:', pokemonData);
+          newCard.skills = this.generatePokemonSkills(pokemonData);
+          console.log(`Generated ${newCard.skills.length} skills for ${newCard.name}`);
+        }
+        
+        this.player.cards.push(newCard);
       }
+    },
+
+    // Migrate existing Pokemon cards to ensure they have proper skills
+    migrateExistingPokemonCards() {
+      console.log('Migrating existing Pokemon cards...');
+      let migrated = 0;
+      
+      this.player.cards.forEach((card, index) => {
+        if (card.type === 'pokemon') {
+          let needsUpdate = false;
+          
+          // Ensure types array exists
+          if (!card.types || card.types.length === 1) {
+            // Try to get full Pokemon data to get all types
+            const pokemonId = card.pokemonId || parseInt(card.id.split('_')[1]);
+            const fullPokemon = this.cardDatabase.find(c => c.pokemonId === pokemonId);
+            
+            if (fullPokemon && fullPokemon.types && fullPokemon.types.length > 1) {
+              card.types = [...fullPokemon.types];
+              console.log(`Updated ${card.name} types from ${[card.pokemonType]} to ${card.types}`);
+            } else {
+              card.types = [card.pokemonType || 'normal'];
+            }
+            needsUpdate = true;
+          }
+          
+          // Regenerate skills if missing or only has one skill
+          if (!card.skills || card.skills.length <= 1) {
+            console.log(`Regenerating skills for ${card.name} (currently has ${card.skills?.length || 0} skills)`);
+            
+            const pokemonData = {
+              id: card.pokemonId || parseInt(card.id.split('_')[1]) || 1,
+              name: card.name,
+              types: card.types
+            };
+            
+            card.skills = this.generatePokemonSkills(pokemonData);
+            console.log(`Generated ${card.skills.length} skills for ${card.name}`);
+            needsUpdate = true;
+            migrated++;
+          }
+          
+          if (needsUpdate) {
+            // Update the card in the array
+            this.player.cards[index] = { ...card };
+          }
+        }
+      });
+      
+      console.log(`Migration complete. Updated ${migrated} Pokemon cards.`);
+      return migrated;
+    },
+
+    clearAllPokemonSkills() {
+      console.log('Clearing all Pokemon skills to force regeneration...');
+      this.player.cards.forEach((card, index) => {
+        if (card.type === 'pokemon') {
+          card.skills = [];
+          console.log(`Cleared skills for ${card.name}`);
+        }
+      });
     },
 
     giveStarterPack() {
       const starterCards = [
+        'pokemon_1',   // Bulbasaur
+        'pokemon_4',   // Charmander
+        'pokemon_7',   // Squirtle
+        'pokemon_25',  // Pikachu
+        'pokemon_16',  // Pidgey
+        'pokemon_19',  // Rattata
+        'pokemon_10',  // Caterpie
+        'pokemon_13',  // Weedle
         'skill_heal',
         'skill_heal',
         'skill_boost',
@@ -529,6 +630,14 @@ export const usePlayerStore = defineStore('player', {
     getCardById(cardId) {
       return this.cardDatabase.find(card => card.id === cardId);
     },
+    
+    getSkillById(skillId) {
+      return getSkillById(skillId);
+    },
+    
+    getSkillsByType(type) {
+      return getSkillsByType(type);
+    },
 
     async generateCardDatabase() {
       const pokemonStore = usePokemonStore();
@@ -562,7 +671,8 @@ export const usePlayerStore = defineStore('player', {
             pokemonId: pokemon.id,
             name: pokemon.name,
             type: 'pokemon',
-            pokemonType: pokemon.types[0],
+            pokemonType: pokemon.types[0], // Primary type for compatibility
+            types: pokemon.types, // Store all types for skill generation
             rarity,
             level: 1,
             hp: stats.hp,
@@ -643,15 +753,26 @@ export const usePlayerStore = defineStore('player', {
     },
 
     generatePokemonSkills(pokemon) {
+      console.log('generatePokemonSkills called for:', pokemon.name, 'with types:', pokemon.types);
       const skills: Skill[] = [];
       const types = (pokemon.types || []) as SkillElement[];
+      
+      // If types is not an array or is empty, use a default type
+      if (!Array.isArray(types) || types.length === 0) {
+        console.log('No types found, using normal as default');
+        types.push('normal' as SkillElement);
+      }
 
       // Always add Tackle as a basic move
       const tackle = getSkillById('tackle');
-      if (tackle) skills.push({ ...tackle });
+      if (tackle) {
+        skills.push({ ...tackle });
+        console.log('Added Tackle skill');
+      }
 
       // Add type-specific skills based on Pokemon's types
       for (const type of types) {
+        console.log('Getting skills for type:', type);
         const typeSkills = getSkillsByType(type);
 
         // Add one basic and one advanced skill per type
@@ -662,9 +783,11 @@ export const usePlayerStore = defineStore('player', {
 
         if (basicSkill && !skills.some(s => s.id === basicSkill.id)) {
           skills.push({ ...basicSkill });
+          console.log(`Added basic ${type} skill: ${basicSkill.name}`);
         }
         if (advancedSkill && !skills.some(s => s.id === advancedSkill.id)) {
           skills.push({ ...advancedSkill });
+          console.log(`Added advanced ${type} skill: ${advancedSkill.name}`);
         }
       }
 
@@ -681,9 +804,13 @@ export const usePlayerStore = defineStore('player', {
       // Ensure we have at least 2 skills
       if (skills.length < 2) {
         const quickAttack = getSkillById('quick_attack');
-        if (quickAttack) skills.push({ ...quickAttack });
+        if (quickAttack) {
+          skills.push({ ...quickAttack });
+          console.log('Added Quick Attack as fallback');
+        }
       }
 
+      console.log(`Generated ${skills.length} skills for ${pokemon.name}:`, skills.map(s => s.name));
       return skills.slice(0, 4); // Max 4 skills
     },
 

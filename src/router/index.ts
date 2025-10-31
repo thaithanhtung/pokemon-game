@@ -114,22 +114,11 @@ const routes: RouteRecordRaw[] = [
         {
           path: 'battle-3d/:mode',
           name: 'card-clash-battle-3d',
-          component: () => import('@/components/battle3d/BattleArena3D.vue'),
+          component: () => import('@/views/card-clash/Battle3DDemo.vue'),
           props: true,
           meta: {
             title: '3D Battle',
             icon: '🎮',
-            showInNav: false
-          }
-        },
-        {
-          path: 'battle-3d/demo',
-          name: 'card-clash-battle-3d-demo-alt',
-          component: () => import('@/views/card-clash/Battle3DDemo.vue'),
-          meta: {
-            title: 'Battle 3D Demo',
-            icon: '🎮',
-            description: '3D battle with sound effects',
             showInNav: false
           }
         },
