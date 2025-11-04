@@ -171,13 +171,17 @@ const setActiveDeck = () => {
 
 const deckCards = computed(() => {
   if (!selectedDeck.value) return [];
+  console.log('DeckBuilder: Computing deck cards for deck:', selectedDeck.value.name);
+  console.log('DeckBuilder: Deck card UIDs:', selectedDeck.value.cards);
+  
   return selectedDeck.value.cards
-    .map(cardId => {
-      // Handle both cardId strings and full card objects
-      if (typeof cardId === 'string') {
-        return cardBattleStore.getCardById(cardId);
+    .map(cardUid => {
+      // Deck now stores UIDs, so we need to find the card in the player's collection
+      const card = playerStore.player?.cards?.find(c => c.uid === cardUid);
+      if (!card) {
+        console.warn(`DeckBuilder: Card with UID ${cardUid} not found in player collection`);
       }
-      return cardId;
+      return card;
     })
     .filter(Boolean);
 });

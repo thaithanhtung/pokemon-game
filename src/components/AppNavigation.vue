@@ -1,7 +1,7 @@
 <template>
   <nav class="app-navigation">
     <!-- Mobile Menu Toggle -->
-    <button 
+    <button
       @click="isMenuOpen = !isMenuOpen"
       class="mobile-menu-toggle"
       aria-label="Toggle navigation menu"
@@ -23,17 +23,15 @@
       <!-- User Info Section -->
       <div class="user-info-section">
         <div class="user-avatar">
-          <img 
-            :src="playerStore.player?.avatar || '/pokeball.png'" 
+          <img
+            :src="playerStore.player?.avatar || 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png'"
             :alt="playerStore.player?.name || 'Trainer'"
             @error="handleAvatarError"
-          >
+          />
         </div>
         <div class="user-details">
           <div class="user-name">{{ playerStore.player?.name || 'Trainer' }}</div>
-          <div class="user-level">
-            <span>⭐</span> Level {{ playerStore.player?.level || 1 }}
-          </div>
+          <div class="user-level"><span>⭐</span> Level {{ playerStore.player?.level || 1 }}</div>
         </div>
         <div class="user-stats">
           <div class="stat-item">
@@ -56,14 +54,16 @@
           </h3>
           <ul>
             <li v-for="route in getGroupRoutes('main')" :key="route.name">
-              <router-link 
+              <router-link
                 :to="{ name: route.name }"
                 @click="isMenuOpen = false"
                 :class="{ active: $route.name === route.name }"
               >
                 <span class="route-icon">{{ route.icon }}</span>
                 <span class="route-title">{{ route.title }}</span>
-                <span v-if="route.description" class="route-description">{{ route.description }}</span>
+                <span v-if="route.description" class="route-description">{{
+                  route.description
+                }}</span>
               </router-link>
             </li>
           </ul>
@@ -77,14 +77,16 @@
           </h3>
           <ul>
             <li v-for="route in getGroupRoutes('games')" :key="route.name">
-              <router-link 
+              <router-link
                 :to="{ name: route.name }"
                 @click="isMenuOpen = false"
                 :class="{ active: $route.name === route.name }"
               >
                 <span class="route-icon">{{ route.icon }}</span>
                 <span class="route-title">{{ route.title }}</span>
-                <span v-if="route.description" class="route-description">{{ route.description }}</span>
+                <span v-if="route.description" class="route-description">{{
+                  route.description
+                }}</span>
               </router-link>
             </li>
           </ul>
@@ -98,7 +100,7 @@
           </h3>
           <ul>
             <li v-for="route in getGroupRoutes('cardClash')" :key="route.name">
-              <router-link 
+              <router-link
                 :to="{ name: route.name }"
                 @click="isMenuOpen = false"
                 :class="{ active: $route.name === route.name }"
@@ -118,14 +120,16 @@
           </h3>
           <ul>
             <li v-for="route in getGroupRoutes('admin')" :key="route.name">
-              <router-link 
+              <router-link
                 :to="{ name: route.name }"
                 @click="isMenuOpen = false"
                 :class="{ active: $route.name === route.name }"
               >
                 <span class="route-icon">{{ route.icon }}</span>
                 <span class="route-title">{{ route.title }}</span>
-                <span v-if="route.description" class="route-description">{{ route.description }}</span>
+                <span v-if="route.description" class="route-description">{{
+                  route.description
+                }}</span>
               </router-link>
             </li>
           </ul>
@@ -139,14 +143,16 @@
           </h3>
           <ul>
             <li v-for="route in getGroupRoutes('other')" :key="route.name">
-              <router-link 
+              <router-link
                 :to="{ name: route.name }"
                 @click="isMenuOpen = false"
                 :class="{ active: $route.name === route.name }"
               >
                 <span class="route-icon">{{ route.icon }}</span>
                 <span class="route-title">{{ route.title }}</span>
-                <span v-if="route.description" class="route-description">{{ route.description }}</span>
+                <span v-if="route.description" class="route-description">{{
+                  route.description
+                }}</span>
               </router-link>
             </li>
           </ul>
@@ -155,8 +161,8 @@
     </div>
 
     <!-- Overlay for mobile -->
-    <div 
-      class="navigation-overlay" 
+    <div
+      class="navigation-overlay"
       :class="{ 'is-open': isMenuOpen }"
       @click="isMenuOpen = false"
     ></div>
@@ -164,7 +170,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { navigationGroups, getRoutesByGroup, canAccessRoute } from '@/router';
 import { usePlayerStore } from '@/stores/player';
@@ -173,9 +179,14 @@ const route = useRoute();
 const playerStore = usePlayerStore();
 const isMenuOpen = ref(false);
 
+watch(playerStore.player, newPlayer => {
+  console.log('Player updated:', newPlayer);
+});
+
 // Handle avatar error
-const handleAvatarError = (event) => {
-  event.target.src = '/pokeball.png';
+const handleAvatarError = event => {
+  // Use Pikachu sprite as fallback
+  event.target.src = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png';
 };
 
 // Check if current route is in card clash section
@@ -190,9 +201,7 @@ const showAdminRoutes = computed(() => {
 
 // Get routes for a specific group
 function getGroupRoutes(groupName) {
-  return getRoutesByGroup(groupName).filter(route => 
-    route && canAccessRoute(route.name)
-  );
+  return getRoutesByGroup(groupName).filter(route => route && canAccessRoute(route.name));
 }
 </script>
 
@@ -462,11 +471,11 @@ function getGroupRoutes(groupName) {
   .mobile-menu-toggle span:first-child {
     width: 28px;
   }
-  
+
   .mobile-menu-toggle span:last-child {
     width: 20px;
   }
-  
+
   .navigation-wrapper {
     width: 320px;
     left: -340px;
@@ -490,9 +499,19 @@ function getGroupRoutes(groupName) {
   animation-fill-mode: both;
 }
 
-.nav-group:nth-child(1) { animation-delay: 0.1s; }
-.nav-group:nth-child(2) { animation-delay: 0.2s; }
-.nav-group:nth-child(3) { animation-delay: 0.3s; }
-.nav-group:nth-child(4) { animation-delay: 0.4s; }
-.nav-group:nth-child(5) { animation-delay: 0.5s; }
+.nav-group:nth-child(1) {
+  animation-delay: 0.1s;
+}
+.nav-group:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.nav-group:nth-child(3) {
+  animation-delay: 0.3s;
+}
+.nav-group:nth-child(4) {
+  animation-delay: 0.4s;
+}
+.nav-group:nth-child(5) {
+  animation-delay: 0.5s;
+}
 </style>

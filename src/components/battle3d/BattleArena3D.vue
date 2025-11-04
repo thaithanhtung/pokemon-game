@@ -45,9 +45,13 @@
         <!-- Switch Pokemon Button -->
         <button 
           v-if="hasBenchPokemon"
-          @click="$emit('request-switch')"
+          @click="() => {
+            console.log('Switch button clicked in BattleArena3D');
+            $emit('request-switch');
+          }"
           class="switch-pokemon-btn"
           :disabled="!canSwitch"
+          :title="!canSwitch ? 'You can only switch during your turn' : 'Switch to another Pokemon'"
         >
           <i class="fas fa-exchange-alt"></i>
           Switch Pokemon
@@ -199,11 +203,23 @@ const hasBenchPokemon = computed(() =>
   currentBattle.value?.player?.bench?.length > 0
 );
 
-const canSwitch = computed(() => 
-  isPlayerTurn.value && 
-  !currentBattle.value?.requiresSwitch && 
-  currentBattle.value?.player?.activePokemon?.hp > 0
-);
+const canSwitch = computed(() => {
+  const can = isPlayerTurn.value && 
+    !currentBattle.value?.requiresSwitch && 
+    currentBattle.value?.player?.activePokemon?.hp > 0;
+  
+  // Debug log
+  if (!can) {
+    console.log('Switch button disabled because:', {
+      isPlayerTurn: isPlayerTurn.value,
+      requiresSwitch: currentBattle.value?.requiresSwitch,
+      playerHP: currentBattle.value?.player?.activePokemon?.hp,
+      currentTurn: currentBattle.value?.currentTurn
+    });
+  }
+  
+  return can;
+});
 
 // UI state
 const selectedSkill = ref<Skill | null>(null);
@@ -279,7 +295,17 @@ watch(
         console.log('Skills count:', pokemon.skills?.length);
         console.log('Full Pokemon data:', pokemon);
         
-        const pokemonId = pokemon.pokemonId || pokemon.id || 25;
+        let pokemonId = pokemon.pokemonId;
+        if (!pokemonId && pokemon.id) {
+          // Extract numeric ID from "pokemon_25" format
+          const match = pokemon.id.match(/pokemon_(\d+)/);
+          if (match) {
+            pokemonId = parseInt(match[1]);
+          } else if (typeof pokemon.id === 'number') {
+            pokemonId = pokemon.id;
+          }
+        }
+        pokemonId = pokemonId || 25;
         const pokemonType = pokemon.types?.[0] || pokemon.pokemonType || 'normal';
         await playerPokemonModel.loadPokemon(pokemonId, pokemonType);
         playerPokemonModel.playIdleAnimation();
@@ -295,7 +321,17 @@ watch(
     if (newUid && oldUid && newUid !== oldUid && opponentPokemonModel) {
       const pokemon = currentBattle.value?.opponent?.activePokemon;
       if (pokemon) {
-        const pokemonId = pokemon.pokemonId || pokemon.id || 6;
+        let pokemonId = pokemon.pokemonId;
+        if (!pokemonId && pokemon.id) {
+          // Extract numeric ID from "pokemon_6" format
+          const match = pokemon.id.match(/pokemon_(\d+)/);
+          if (match) {
+            pokemonId = parseInt(match[1]);
+          } else if (typeof pokemon.id === 'number') {
+            pokemonId = pokemon.id;
+          }
+        }
+        pokemonId = pokemonId || 6;
         const pokemonType = pokemon.types?.[0] || pokemon.pokemonType || 'fire';
         await opponentPokemonModel.loadPokemon(pokemonId, pokemonType);
         opponentPokemonModel.playIdleAnimation();
@@ -323,10 +359,32 @@ watch(
 
         addBattleLog(latestLog.message, logType);
 
-        // Play animations for opponent's turn based on log message
-        if (latestLog.message.includes('Opponent') && latestLog.message.includes('used')) {
-          // Opponent is attacking - play animations
-          handleOpponentAttackAnimation();
+        // Play animations based on who is attacking
+        // Check if it's an attack by looking for "used" and checking current turn
+        console.log('Battle log message:', latestLog.message);
+        console.log('Current turn:', currentBattle.value?.currentTurn);
+        
+        if (latestLog.message.includes('used') && latestLog.message.includes('damage')) {
+          // Determine who attacked based on current turn or by checking the Pokemon name
+          const opponentName = currentBattle.value?.opponent?.activePokemon?.name;
+          const playerName = currentBattle.value?.player?.activePokemon?.name;
+          
+          console.log('Attack detected! Checking attacker...');
+          console.log('Opponent Pokemon:', opponentName);
+          console.log('Player Pokemon:', playerName);
+          console.log('Message includes opponent name?', opponentName && latestLog.message.includes(opponentName));
+          
+          const isOpponentAttack = currentBattle.value?.currentTurn === 'opponent' || 
+                                   (opponentName && latestLog.message.includes(opponentName));
+          
+          console.log('Is opponent attack?', isOpponentAttack);
+          
+          if (isOpponentAttack) {
+            console.log('Opponent attack confirmed! Playing animation...');
+            handleOpponentAttackAnimation();
+          } else {
+            console.log('This was a player attack, skipping opponent animation');
+          }
         }
       }
     }
@@ -339,6 +397,51 @@ onMounted(() => {
   battle3DStore.detectOptimalPerformance();
   initializeBattleArena();
 });
+
+// Watch for player HP changes to detect opponent attacks
+let lastPlayerHP = 0;
+watch(
+  () => currentBattle.value?.player?.activePokemon?.hp,
+  (newHP, oldHP) => {
+    if (oldHP !== undefined && newHP !== undefined && newHP < oldHP && 
+        currentBattle.value?.currentTurn === 'opponent') {
+      console.log('Player HP decreased during opponent turn, triggering attack animation');
+      console.log(`HP changed from ${oldHP} to ${newHP}`);
+      
+      // Trigger opponent attack animation
+      if (!isExecutingOpponentAnimation) {
+        handleOpponentAttackAnimation();
+      }
+    }
+    lastPlayerHP = newHP || 0;
+  }
+);
+
+let isExecutingOpponentAnimation = false;
+
+// Watch for initial battle data to ensure models are synchronized
+let hasInitializedModels = false;
+watch(
+  () => ({
+    hasPlayer: !!currentBattle.value?.player?.activePokemon,
+    hasOpponent: !!currentBattle.value?.opponent?.activePokemon,
+    playerName: currentBattle.value?.player?.activePokemon?.name,
+    opponentName: currentBattle.value?.opponent?.activePokemon?.name
+  }),
+  async (newVal) => {
+    // Only initialize once when both Pokemon are available
+    if (!hasInitializedModels && newVal.hasPlayer && newVal.hasOpponent && scene) {
+      console.log('Initial battle data loaded, synchronizing 3D models');
+      console.log('Player:', newVal.playerName);
+      console.log('Opponent:', newVal.opponentName);
+      
+      // Reload models with correct data
+      await loadPokemonModels();
+      hasInitializedModels = true;
+    }
+  },
+  { immediate: true }
+);
 
 // Watch for player Pokemon changes - watch both store and props
 watch(
@@ -527,26 +630,49 @@ const createBattleField = () => {
 };
 
 const loadPokemonModels = async () => {
-  // Get Pokemon data from battle store or props as fallback
+  // Prioritize battle store data for synchronization
   const battle = currentBattle.value;
-  const playerData = props.playerPokemon ||
-    battle?.player?.activePokemon || {
-      id: 25,
-      name: 'Pikachu',
-      types: ['electric'],
-      stats: { hp: 100, attack: 55, defense: 40, speed: 90 },
-    };
+  
+  // For player, use battle data first, then props fallback
+  const playerData = battle?.player?.activePokemon || props.playerPokemon || {
+    id: 25,
+    name: 'Pikachu',
+    types: ['electric'],
+    stats: { hp: 100, attack: 55, defense: 40, speed: 90 },
+  };
 
-  const opponentData = props.opponentPokemon ||
-    battle?.opponent?.activePokemon || {
-      id: 6,
-      name: 'Charizard',
-      types: ['fire', 'flying'],
-      stats: { hp: 120, attack: 84, defense: 78, speed: 100 },
-    };
+  // For opponent, use battle data first, then props fallback
+  const opponentData = battle?.opponent?.activePokemon || props.opponentPokemon || {
+    id: 6,
+    name: 'Charizard',
+    types: ['fire', 'flying'],
+    stats: { hp: 120, attack: 84, defense: 78, speed: 100 },
+  };
+
+  console.log('Loading Pokemon models:');
+  console.log('Player data:', { name: playerData.name, id: playerData.id, pokemonId: playerData.pokemonId });
+  console.log('Opponent data:', { name: opponentData.name, id: opponentData.id, pokemonId: opponentData.pokemonId });
+
+  // Dispose existing models if they exist
+  if (playerPokemonModel) {
+    playerPokemonModel.dispose();
+  }
+  if (opponentPokemonModel) {
+    opponentPokemonModel.dispose();
+  }
 
   // Load player Pokemon model
-  const playerPokemonId = playerData.pokemonId || playerData.id || 25;
+  let playerPokemonId = playerData.pokemonId;
+  if (!playerPokemonId && playerData.id) {
+    // Extract numeric ID from "pokemon_25" format
+    const match = playerData.id.match(/pokemon_(\d+)/);
+    if (match) {
+      playerPokemonId = parseInt(match[1]);
+    } else if (typeof playerData.id === 'number') {
+      playerPokemonId = playerData.id;
+    }
+  }
+  playerPokemonId = playerPokemonId || 25;
   const playerType = playerData.types?.[0] || playerData.pokemonType || 'electric';
 
   playerPokemonModel = new Pokemon3DModel(scene);
@@ -555,31 +681,52 @@ const loadPokemonModels = async () => {
   playerPokemonModel.playIdleAnimation();
 
   // Load opponent Pokemon model
-  const opponentPokemonId = opponentData.pokemonId || opponentData.id || 6;
+  let opponentPokemonId = opponentData.pokemonId;
+  if (!opponentPokemonId && opponentData.id) {
+    // Extract numeric ID from "pokemon_6" format
+    const match = opponentData.id.match(/pokemon_(\d+)/);
+    if (match) {
+      opponentPokemonId = parseInt(match[1]);
+    } else if (typeof opponentData.id === 'number') {
+      opponentPokemonId = opponentData.id;
+    }
+  }
+  opponentPokemonId = opponentPokemonId || 6;
   const opponentType = opponentData.types?.[0] || opponentData.pokemonType || 'fire';
 
   opponentPokemonModel = new Pokemon3DModel(scene);
   await opponentPokemonModel.loadPokemon(opponentPokemonId, opponentType);
   opponentPokemonModel.setPosition(new BABYLON.Vector3(6, 1, 0));
   opponentPokemonModel.playIdleAnimation();
+  
+  console.log(`Models loaded - Player: ${playerData.name} (ID: ${playerPokemonId}), Opponent: ${opponentData.name} (ID: ${opponentPokemonId})`);
 };
 
 // Update player Pokemon model when switching
 const updatePlayerPokemonModel = async () => {
   if (!scene) return;
 
-  // Get Pokemon data from props first (already transformed), fallback to store
-  const playerData = props.playerPokemon || currentBattle.value?.player?.activePokemon;
-  if (!playerData) return;
+  // Use store data directly for switches to ensure we get the latest data
+  const storeData = currentBattle.value?.player?.activePokemon;
+  if (!storeData) return;
 
-  const playerPokemonId = playerData.pokemonId || playerData.id || 25;
-  const playerType = playerData.types?.[0] || playerData.pokemonType || 'electric';
+  // Extract ID properly from the store data
+  let playerPokemonId = storeData.pokemonId;
+  if (!playerPokemonId && storeData.id) {
+    const match = storeData.id.match(/pokemon_(\d+)/);
+    if (match) {
+      playerPokemonId = parseInt(match[1]);
+    }
+  }
+  playerPokemonId = playerPokemonId || 25;
+  
+  const playerType = storeData.types?.[0] || storeData.pokemonType || 'electric';
 
   console.log('Updating player Pokemon model:', {
-    name: playerData.name,
+    name: storeData.name,
     id: playerPokemonId,
     type: playerType,
-    data: playerData
+    data: storeData
   });
 
   // Create switch out effect
@@ -602,25 +749,34 @@ const updatePlayerPokemonModel = async () => {
   createSwitchEffect(playerPokemonModel.getPosition(), false);
   playerPokemonModel.playIdleAnimation();
 
-  console.log(`Player switched to ${playerData.name} (ID: ${playerPokemonId})`);
+  console.log(`Player switched to ${storeData.name} (ID: ${playerPokemonId})`);
 };
 
 // Update opponent Pokemon model when switching
 const updateOpponentPokemonModel = async () => {
   if (!scene) return;
 
-  // Get Pokemon data from props first (already transformed), fallback to store
-  const opponentData = props.opponentPokemon || currentBattle.value?.opponent?.activePokemon;
-  if (!opponentData) return;
+  // Use store data directly for switches to ensure we get the latest data
+  const storeData = currentBattle.value?.opponent?.activePokemon;
+  if (!storeData) return;
 
-  const opponentPokemonId = opponentData.pokemonId || opponentData.id || 6;
-  const opponentType = opponentData.types?.[0] || opponentData.pokemonType || 'fire';
+  // Extract ID properly from the store data
+  let opponentPokemonId = storeData.pokemonId;
+  if (!opponentPokemonId && storeData.id) {
+    const match = storeData.id.match(/pokemon_(\d+)/);
+    if (match) {
+      opponentPokemonId = parseInt(match[1]);
+    }
+  }
+  opponentPokemonId = opponentPokemonId || 6;
+  
+  const opponentType = storeData.types?.[0] || storeData.pokemonType || 'fire';
 
   console.log('Updating opponent Pokemon model:', {
-    name: opponentData.name,
+    name: storeData.name,
     id: opponentPokemonId,
     type: opponentType,
-    data: opponentData
+    data: storeData
   });
 
   // Create switch out effect
@@ -643,7 +799,7 @@ const updateOpponentPokemonModel = async () => {
   createSwitchEffect(opponentPokemonModel.getPosition(), false);
   opponentPokemonModel.playIdleAnimation();
 
-  console.log(`Opponent switched to ${opponentData.name} (ID: ${opponentPokemonId})`);
+  console.log(`Opponent switched to ${storeData.name} (ID: ${opponentPokemonId})`);
 };
 
 const loadBattleData = () => {
@@ -741,7 +897,7 @@ const executeSkill = async (skill: Skill) => {
 
       // Play impact sound
       if (soundService.isEnabled()) {
-        soundService.play('attack-hit', 0.8);
+        soundService.play('button-click', 0.8);
       }
 
       // Screen effects for critical hits
@@ -783,11 +939,48 @@ const executeSkill = async (skill: Skill) => {
 // Opponent turn is now handled automatically by the cardBattleStore
 // We just need to watch for changes and play animations
 const handleOpponentAttackAnimation = async () => {
-  if (!opponentPokemonModel || !playerPokemonModel) return;
+  console.log('=== handleOpponentAttackAnimation CALLED ===');
+  
+  if (!opponentPokemonModel || !playerPokemonModel) {
+    console.log('Models not ready:', { 
+      opponentModel: !!opponentPokemonModel, 
+      playerModel: !!playerPokemonModel 
+    });
+    return;
+  }
+  
+  // Prevent multiple simultaneous animations
+  if (isExecutingOpponentAnimation) {
+    console.log('Already executing opponent animation, skipping');
+    return;
+  }
+  
+  isExecutingOpponentAnimation = true;
 
   try {
     // Store HP before for damage calculation
     const playerHPBefore = playerHP.value;
+    console.log('Player HP before:', playerHPBefore);
+    
+    // Get the skill that was used - check animation data or use default
+    const opponentPokemon = currentBattle.value?.opponent?.activePokemon;
+    const skillElement = opponentPokemon?.anim?.element || 
+                        opponentPokemon?.types?.[0]?.toLowerCase() || 
+                        opponentPokemon?.pokemonType?.toLowerCase() || 
+                        'normal';
+    
+    console.log('Opponent attack element:', skillElement, 'from Pokemon:', opponentPokemon?.name);
+    
+    // Create a skill object for the effect
+    const opponentSkill: Skill = {
+      id: 'opponent-attack',
+      name: 'Attack',
+      element: skillElement as SkillElement,
+      power: 50,
+      energy: 1,
+      category: 'physical',
+      description: 'Opponent attack'
+    };
 
     // Transition camera
     await cameraSystem.transitionToState('attack', 800);
@@ -808,6 +1001,9 @@ const handleOpponentAttackAnimation = async () => {
 
     // Add subtle camera rotation
     cameraSystem.rotateAroundTarget(1500);
+    
+    // Create skill visual effects - THIS IS THE FIX
+    await createSkillEffect(opponentSkill, opponentPokemonModel, playerPokemonModel);
 
     // Wait for animation
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -827,7 +1023,7 @@ const handleOpponentAttackAnimation = async () => {
 
       // Play impact sound
       if (soundService.isEnabled()) {
-        soundService.play('attack-hit', 0.8);
+        soundService.play('button-click', 0.8);
       }
 
       // Screen effects for critical hits
@@ -851,6 +1047,10 @@ const handleOpponentAttackAnimation = async () => {
     await cameraSystem.transitionToState('battle', 1000);
   } catch (error) {
     console.error('Error in opponent attack animation:', error);
+  } finally {
+    // Reset the flag
+    isExecutingOpponentAnimation = false;
+    console.log('Opponent animation completed');
   }
 };
 
@@ -863,11 +1063,11 @@ const handleBattleEnd = async (playerWon: boolean) => {
     if (playerWon) {
       soundService.play('success', 0.8);
       // Play Pokemon faint sound for opponent
-      setTimeout(() => soundService.play('pokemon-faint', 0.7), 500);
+      setTimeout(() => soundService.play('error', 0.7), 500);
     } else {
       soundService.play('error', 0.8);
       // Play Pokemon faint sound for player
-      setTimeout(() => soundService.play('pokemon-faint', 0.7), 500);
+      setTimeout(() => soundService.play('error', 0.7), 500);
     }
   }
 
@@ -926,7 +1126,7 @@ const restartBattle = async () => {
 
   // Play battle start sound
   if (soundService.isEnabled()) {
-    soundService.play('battle-start', 0.7);
+    soundService.play('success', 0.7);
   }
 
   addBattleLog('Battle restarted!', 'info');
@@ -989,9 +1189,9 @@ const createSkillEffect = async (
   const targetPos = target.getPosition();
 
   // Play skill sound effect based on element
-  const skillSoundName = `skill-${skill.element}`;
+  // Use button-click sound for all skills since element-specific sounds don't exist
   if (soundService.isEnabled()) {
-    soundService.play(skillSoundName, 0.7);
+    soundService.play('button-click', 0.7);
   }
 
   switch (skill.element) {
@@ -2569,7 +2769,8 @@ const createSwitchEffect = (position: BABYLON.Vector3, isOut: boolean) => {
 
   // Sound effect
   if (soundService.isEnabled()) {
-    soundService.play(isOut ? 'pokemon-return' : 'pokemon-send', 0.5);
+    // Use card-flip sound for Pokemon switching
+    soundService.play('card-flip', 0.5);
   }
 };
 

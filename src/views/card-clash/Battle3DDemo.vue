@@ -50,7 +50,8 @@
       </div>
 
       <BattleArena3D
-        v-if="battleActive && playerPokemon && opponentPokemon"
+        v-if="battleActive && currentBattle"
+        :key="battleActive ? 'battle-active' : 'battle-inactive'"
         :player-pokemon="playerPokemon"
         :opponent-pokemon="opponentPokemon"
         battle-id="pvp-demo"
@@ -196,13 +197,41 @@ const currentBattle = computed(() => cardBattleStore.currentBattle);
 
 // Helper function to get Pokemon sprite URL
 const getPokemonSprite = (pokemon: any) => {
-  const id = pokemon.pokemonId || pokemon.id?.replace('pokemon_', '') || '1';
-  console.log(`Getting sprite for ${pokemon.name}, ID: ${id}`);
+  console.log('=== GET POKEMON SPRITE ===');
+  console.log('Pokemon:', pokemon);
+  
+  let id = pokemon.pokemonId;
+  
+  // If pokemonId is not found, try to extract from id field
+  if (!id && pokemon.id) {
+    console.log('No pokemonId, checking id field:', pokemon.id);
+    // If id is like "pokemon_25", extract the number
+    const match = pokemon.id.match(/pokemon_(\d+)/);
+    if (match) {
+      id = parseInt(match[1]);
+      console.log('Extracted ID from pattern:', id);
+    } else if (typeof pokemon.id === 'number') {
+      id = pokemon.id;
+      console.log('Using numeric id directly:', id);
+    }
+  }
+  
+  // Fallback to a default if still not found
+  id = id || 25;
+  
+  console.log(`Final sprite ID for ${pokemon.name}: ${id}`);
   return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${id}.png`;
 };
 
 // Convert battle card to Pokemon format for 3D rendering
 const cardToBattlePokemon = (card: any): any => {
+  console.log('=== CARD TO BATTLE POKEMON ===');
+  console.log('Input card:', card);
+  console.log('Card name:', card.name);
+  console.log('Card.pokemonId:', card.pokemonId);
+  console.log('Card.id:', card.id);
+  console.log('Card.uid:', card.uid);
+  
   // The card from battle state is a BattleCard with extended properties
   // Extract Pokemon ID from various possible fields
   let pokemonId = card.pokemonId;
@@ -213,15 +242,16 @@ const cardToBattlePokemon = (card: any): any => {
     const match = card.id.match(/pokemon_(\d+)/);
     if (match) {
       pokemonId = parseInt(match[1]);
+      console.log('Extracted pokemonId from card.id:', pokemonId);
     }
   }
   
   // Fallback to a default if still not found
   pokemonId = pokemonId || 25; // Default to Pikachu instead of 1
   
-  console.log(`Converting card ${card.name} to battle Pokemon, ID: ${pokemonId}`, card);
+  console.log(`Final pokemonId for ${card.name}: ${pokemonId}`);
   
-  return {
+  const result = {
     id: pokemonId,
     pokemonId: pokemonId,
     name: card.name,
@@ -234,18 +264,25 @@ const cardToBattlePokemon = (card: any): any => {
       speed: card.speed || 60,
     },
   };
+  
+  console.log('Converted result:', result);
+  return result;
 };
 
 const playerPokemon = computed(() => {
   if (currentBattle.value?.player?.activePokemon) {
-    return cardToBattlePokemon(currentBattle.value.player.activePokemon);
+    const pokemon = cardToBattlePokemon(currentBattle.value.player.activePokemon);
+    console.log('Battle3DDemo - Player Pokemon computed:', pokemon);
+    return pokemon;
   }
   return null;
 });
 
 const opponentPokemon = computed(() => {
   if (currentBattle.value?.opponent?.activePokemon) {
-    return cardToBattlePokemon(currentBattle.value.opponent.activePokemon);
+    const pokemon = cardToBattlePokemon(currentBattle.value.opponent.activePokemon);
+    console.log('Battle3DDemo - Opponent Pokemon computed:', pokemon);
+    return pokemon;
   }
   return null;
 });
@@ -308,7 +345,7 @@ const startBattle = async () => {
   // Check if player has any cards
   if (!playerStore.player.cards || playerStore.player.cards.length === 0) {
     console.log('No cards found, initializing starter pack');
-    cardBattleStore.giveStarterPack();
+    await cardBattleStore.giveStarterPack();
   }
   
   // Check if player has active deck
@@ -318,13 +355,13 @@ const startBattle = async () => {
   }
 
   // Start the actual battle
-  cardBattleStore.startBattle('pvp');
+  await cardBattleStore.startBattle('pvp');
   
   // Only activate battle UI if battle was successfully started
   if (cardBattleStore.currentBattle) {
     battleActive.value = true;
     battle3DStore.transitionToPhase('preparation');
-    sound.play('battle-start');
+    sound.play('success');
     toast.info('Battle Started!', 'Good luck!');
 
     // Start battle music after a short delay
@@ -343,7 +380,7 @@ const onBattleStart = () => {
 
 const onAttackHit = (data: any) => {
   console.log('Attack hit!', data);
-  sound.play('attack-hit', 0.7);
+  sound.play('button-click', 0.7);
 
   // Play additional sounds based on attack type
   if (data.critical) {
@@ -358,7 +395,7 @@ const onSkillExecuted = (skill: any) => {
 
 const onPokemonFaint = (data: any) => {
   console.log('Pokemon fainted!', data);
-  sound.play('pokemon-faint');
+  sound.play('error');
 
   // Fade out battle music
   sound.fadeOut('shop-music', 1000);
@@ -383,20 +420,45 @@ const onBattleEnd = (result: 'victory' | 'defeat') => {
 };
 
 const switchPokemon = (pokemon: any) => {
+  console.log('=== SWITCH POKEMON CLICKED ===');
   console.log('Switching to Pokemon:', pokemon.name);
-  console.log('Pokemon data:', pokemon); // Debug log
+  console.log('Pokemon data:', {
+    name: pokemon.name,
+    id: pokemon.id,
+    pokemonId: pokemon.pokemonId,
+    uid: pokemon.uid,
+    hp: pokemon.hp,
+    types: pokemon.types
+  });
+  
+  // Check current turn before switching
+  console.log('Current turn before switch:', currentBattle.value?.currentTurn);
+  console.log('Is forced switch?', currentBattle.value?.requiresSwitch);
+  
   cardBattleStore.executePlayerAction({
     type: 'switch',
     pokemon: pokemon
   });
+  
   sound.play('button-click');
   showSwitchUI.value = false; // Close the UI after switching
+  
+  console.log('Switch UI closed');
 };
 
 const showVoluntarySwitch = () => {
+  console.log('Switch Pokemon button clicked');
+  console.log('Current battle state:', {
+    isPlayerTurn: currentBattle.value?.currentTurn === 'player',
+    requiresSwitch: currentBattle.value?.requiresSwitch,
+    playerHP: currentBattle.value?.player?.activePokemon?.hp,
+    benchCount: currentBattle.value?.player?.bench?.length
+  });
+  
   if (currentBattle.value?.player?.bench?.length > 0) {
     showSwitchUI.value = true;
     sound.play('button-click');
+    console.log('Switch UI opened');
   } else {
     toast.warning('No Pokemon Available', 'You have no Pokemon on your bench to switch to!');
   }

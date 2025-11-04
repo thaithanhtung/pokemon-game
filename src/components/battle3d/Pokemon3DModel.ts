@@ -28,6 +28,7 @@ export class Pokemon3DModel {
   private pokemonId: number = 0;
   private pokemonType: PokemonType = 'normal';
   private shadowPlane: BABYLON.Mesh | null = null;
+  private initialPosition: BABYLON.Vector3 | null = null;
 
   constructor(scene: BABYLON.Scene) {
     this.scene = scene;
@@ -395,6 +396,12 @@ export class Pokemon3DModel {
     
     // Reset after animation
     attackGroup.onAnimationGroupEndObservable.addOnce(() => {
+      // IMPORTANT: Reset position to exact initial values to prevent drift
+      if (this.initialPosition) {
+        this.pokemonMesh.position = this.initialPosition.clone();
+      } else {
+        this.pokemonMesh.position = originalPosition.clone();
+      }
       originalEmissive.emissiveColor = originalEmissiveColor;
       this.playIdleAnimation();
     });
@@ -411,6 +418,9 @@ export class Pokemon3DModel {
     // Enhanced hurt animation with multiple effects
     const material = this.spritePlane.material as BABYLON.StandardMaterial;
     const originalEmissiveColor = material.emissiveColor.clone();
+    
+    // Store original position to reset after animation
+    const originalPosition = this.pokemonMesh.position.clone();
     
     // Flash red effect
     let flashCount = 0;
@@ -494,6 +504,12 @@ export class Pokemon3DModel {
     
     // Return to idle after hurt
     hurtGroup.onAnimationGroupEndObservable.addOnce(() => {
+      // IMPORTANT: Reset position to exact initial values to prevent drift
+      if (this.initialPosition) {
+        this.pokemonMesh.position = this.initialPosition.clone();
+      } else {
+        this.pokemonMesh.position = originalPosition.clone();
+      }
       this.playIdleAnimation();
     });
     
@@ -587,10 +603,21 @@ export class Pokemon3DModel {
 
   setPosition(position: BABYLON.Vector3) {
     this.pokemonMesh.position = position;
+    // Store the initial position for reference
+    if (!this.initialPosition) {
+      this.initialPosition = position.clone();
+    }
   }
 
   getPosition(): BABYLON.Vector3 {
     return this.pokemonMesh.position;
+  }
+
+  resetPosition() {
+    // Reset to initial position if available
+    if (this.initialPosition) {
+      this.pokemonMesh.position = this.initialPosition.clone();
+    }
   }
 
   getMesh(): BABYLON.Mesh {

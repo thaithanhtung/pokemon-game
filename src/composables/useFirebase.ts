@@ -493,6 +493,16 @@ export function useFirebase() {
 
               playerStore.loaded = true;
               console.log('Player data updated in Pinia store');
+              
+              // Ensure card database is initialized before migrating decks
+              if (!playerStore.cardDatabase || playerStore.cardDatabase.length === 0) {
+                console.log('Initializing card database before deck migration...');
+                await playerStore.generateCardDatabase();
+              }
+              
+              // Run deck format migration after loading data from Firebase
+              console.log('Running deck format migration...');
+              playerStore.migrateDeckFormat();
             } else {
               await createNewUserProfile(firebaseUser);
               console.log('New user created in Firestore:', firebaseUser.uid);

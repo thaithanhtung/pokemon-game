@@ -187,14 +187,46 @@ export const useCardBattleStore = defineStore('cardBattle', {
 
     getPlayerDeck: () => {
       const playerStore = usePlayerStore();
-      if (!playerStore.player?.activeDeck) return [];
+      console.log('=== getPlayerDeck DEBUG ===');
+      console.log('Player exists:', !!playerStore.player);
+      console.log('Active deck ID:', playerStore.player?.activeDeck);
+      
+      if (!playerStore.player?.activeDeck) {
+        console.log('No active deck set');
+        return [];
+      }
+      
+      console.log('All decks:', playerStore.player.decks);
       const deck = playerStore.player.decks?.find(d => d.id === playerStore.player.activeDeck);
-      if (!deck) return [];
+      console.log('Found deck:', deck);
+      
+      if (!deck) {
+        console.log('Deck not found');
+        return [];
+      }
+      
+      console.log('Deck.cards array:', deck.cards);
+      console.log('First few deck.cards items:', deck.cards.slice(0, 3));
+      console.log('Type of first deck.cards item:', typeof deck.cards[0]);
+      
+      console.log('Player cards collection size:', playerStore.player.cards?.length);
+      console.log('First few player cards:', playerStore.player.cards?.slice(0, 3));
       
       // Map deck card UIDs to actual card objects
-      return deck.cards
-        .map(cardUid => playerStore.player.cards.find(c => c.uid === cardUid))
+      const mappedCards = deck.cards
+        .map((cardUid, index) => {
+          console.log(`Mapping card ${index}: UID = ${cardUid}`);
+          const foundCard = playerStore.player.cards.find(c => c.uid === cardUid);
+          console.log(`  Found card:`, foundCard ? `${foundCard.name} (${foundCard.id})` : 'NOT FOUND');
+          return foundCard;
+        })
         .filter(Boolean);
+      
+      console.log('Final mapped cards count:', mappedCards.length);
+      console.log('Pokemon in deck:', mappedCards.filter(c => c.type === 'pokemon').map(c => ({ name: c.name, id: c.id, uid: c.uid })));
+      console.log('=== END getPlayerDeck DEBUG ===');
+      
+      return mappedCards;
     },
 
     calculateTypeMultiplier: () => (attackerType, defenderType) => {
@@ -388,17 +420,28 @@ export const useCardBattleStore = defineStore('cardBattle', {
       }
 
       // Give starter pack if no cards
+      console.log('Checking player cards...', playerStore.player?.cards?.length || 0);
       if (!playerStore.player?.cards || playerStore.player.cards.length === 0) {
-        this.giveStarterPack();
+        console.log('No cards found, giving starter pack...');
+        await this.giveStarterPack();
+      } else {
+        console.log('Player already has', playerStore.player.cards.length, 'cards');
       }
 
       // Create starter deck if no decks
+      console.log('Checking player decks...', playerStore.player?.decks?.length || 0);
       if (!playerStore.player?.decks || playerStore.player.decks.length === 0) {
+        console.log('No decks found, creating starter deck...');
         this.createStarterDeck();
+      } else {
+        console.log('Player already has', playerStore.player.decks.length, 'decks');
       }
 
       // Migrate existing Pokemon cards to ensure they have proper skills
       playerStore.migrateExistingPokemonCards();
+      
+      // Migrate deck format to ensure all decks use UIDs
+      playerStore.migrateDeckFormat();
 
       console.log('initializePlayer done');
     },
@@ -513,13 +556,16 @@ export const useCardBattleStore = defineStore('cardBattle', {
       playerStore.cardDatabase.push(...playerStore.itemCards);
     },
 
-    giveStarterPack() {
+    async giveStarterPack() {
       const playerStore = usePlayerStore();
 
       // Ensure card database is generated
+      console.log('=== GIVE STARTER PACK ===');
+      console.log('Card database size:', playerStore.cardDatabase?.length || 0);
       if (!playerStore.cardDatabase || playerStore.cardDatabase.length === 0) {
         console.log('Card database not initialized, generating...');
-        playerStore.generateCardDatabase();
+        await playerStore.generateCardDatabase();
+        console.log('Card database after generation:', playerStore.cardDatabase?.length || 0);
       }
 
       const starterCards = [
@@ -552,11 +598,16 @@ export const useCardBattleStore = defineStore('cardBattle', {
     createStarterDeck() {
       const playerStore = usePlayerStore();
       
+      console.log('=== CREATE STARTER DECK ===');
+      console.log('Player cards before creating deck:', playerStore.player?.cards?.length);
+      
       // Get actual card UIDs from player's collection
       const pokemonCards = playerStore.player.cards
         .filter(c => c.type === 'pokemon')
         .slice(0, 8) // Get first 8 Pokemon
         .map(c => c.uid);
+      
+      console.log('Pokemon UIDs for deck:', pokemonCards);
       
       const skillCards = playerStore.player.cards
         .filter(c => c.type === 'skill')
@@ -575,12 +626,19 @@ export const useCardBattleStore = defineStore('cardBattle', {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
+      
+      console.log('Created deck with cards:', deck.cards);
+      console.log('Deck card count:', deck.cards.length);
 
       if (!playerStore.player.decks) {
         playerStore.player.decks = [];
       }
       playerStore.player.decks.push(deck);
       playerStore.player.activeDeck = deck.id;
+      
+      console.log('Deck added to player. Total decks:', playerStore.player.decks.length);
+      console.log('Active deck set to:', playerStore.player.activeDeck);
+      console.log('=== END CREATE STARTER DECK ===');
     },
 
     getRandomCard() {
@@ -608,13 +666,13 @@ export const useCardBattleStore = defineStore('cardBattle', {
       return eligibleCards[Math.floor(Math.random() * eligibleCards.length)];
     },
 
-    startBattle(mode, opponentId = null) {
+    async startBattle(mode, opponentId = null) {
       const playerStore = usePlayerStore();
 
       // Ensure player has cards and a deck
       if (!playerStore.player?.cards || playerStore.player.cards.length === 0) {
         console.log('No cards in collection, giving starter pack');
-        this.giveStarterPack();
+        await this.giveStarterPack();
       }
 
       if (!playerStore.player?.decks || playerStore.player.decks.length === 0) {
@@ -626,8 +684,49 @@ export const useCardBattleStore = defineStore('cardBattle', {
       console.log('Running skill migration before battle...');
       playerStore.migrateExistingPokemonCards();
 
+      // Check player data state
+      console.log('=== CHECKING PLAYER DATA STATE ===');
+      console.log('Player exists:', !!playerStore.player);
+      console.log('Player cards count:', playerStore.player?.cards?.length);
+      console.log('Player decks count:', playerStore.player?.decks?.length);
+      console.log('Active deck ID:', playerStore.player?.activeDeck);
+
       // Get player deck - getPlayerDeck already returns card objects
       let playerDeck = this.getPlayerDeck;
+      
+      console.log('=== LOADING PLAYER DECK FOR BATTLE ===');
+      
+      // Debug the active deck structure
+      if (playerStore.player?.activeDeck) {
+        const activeDeck = playerStore.player.decks?.find(d => d.id === playerStore.player.activeDeck);
+        console.log('Active deck object:', activeDeck);
+        if (activeDeck) {
+          console.log('Deck name:', activeDeck.name);
+          console.log('Deck cards array length:', activeDeck.cards.length);
+          console.log('First few cards in deck:', activeDeck.cards.slice(0, 3));
+          console.log('Type of first card:', typeof activeDeck.cards[0]);
+          
+          // Check if cards are objects or UIDs
+          if (activeDeck.cards.length > 0) {
+            const firstCard = activeDeck.cards[0];
+            if (typeof firstCard === 'object') {
+              console.log('DECK CONTAINS OBJECTS! Need migration. First card:', firstCard);
+            } else {
+              console.log('Deck contains UIDs (correct). First UID:', firstCard);
+            }
+          }
+        }
+      }
+      
+      console.log('getPlayerDeck returned:', playerDeck.length, 'cards');
+      console.log('Deck cards:', playerDeck);
+      console.log('Deck cards count:', playerDeck.length);
+      console.log('Deck Pokemon:', playerDeck.filter(c => c.type === 'pokemon').map(c => ({ name: c.name, id: c.id, uid: c.uid })));
+      
+      // Show all Pokemon in collection vs deck
+      const allPlayerPokemon = (playerStore.player?.cards || []).filter(c => c.type === 'pokemon');
+      console.log('Total Pokemon in collection:', allPlayerPokemon.length);
+      console.log('All collection Pokemon:', allPlayerPokemon.map(c => ({ name: c.name, id: c.id, uid: c.uid })));
 
       // If still no deck or empty deck, create a basic one from available cards
       if (playerDeck.length === 0) {
@@ -857,6 +956,9 @@ export const useCardBattleStore = defineStore('cardBattle', {
           this.addBattleLog('You must choose a Pokemon to send out!');
           return;
         }
+        // This is a forced switch - don't count as a turn
+        this.switchPokemon('player', action.pokemon);
+        return; // Exit early, don't trigger AI turn for forced switches
       }
       
       if (this.currentBattle.currentTurn !== 'player') {
@@ -886,7 +988,9 @@ export const useCardBattleStore = defineStore('cardBattle', {
 
       // SIMPLIFIED AI TURN - Execute immediately after player
       // Switch action also triggers AI turn (switching costs a turn)
-      if (!this.currentBattle.ended && this.currentBattle.opponent.activePokemon.hp > 0) {
+      if (!this.currentBattle.ended && 
+          this.currentBattle.opponent.activePokemon.hp > 0 &&
+          this.currentBattle.player.activePokemon.hp > 0) {
         console.log('Player turn complete, AI will counter-attack');
         
         // Execute AI attack immediately
@@ -903,6 +1007,12 @@ export const useCardBattleStore = defineStore('cardBattle', {
         return;
       }
       
+      // Prevent double AI turns
+      if (this.currentBattle.currentTurn === 'opponent') {
+        console.log('Already opponent turn, skipping duplicate AI action');
+        return;
+      }
+      
       const ai = this.currentBattle.opponent;
       const player = this.currentBattle.player;
       
@@ -915,6 +1025,9 @@ export const useCardBattleStore = defineStore('cardBattle', {
         console.log('Player Pokemon fainted');
         return;
       }
+      
+      // Set turn to opponent
+      this.currentBattle.currentTurn = 'opponent';
       
       // Select a skill for AI to use
       const availableSkills = ai.activePokemon.skills || [];
@@ -960,11 +1073,15 @@ export const useCardBattleStore = defineStore('cardBattle', {
       this.currentBattle.player.energy = Math.min(5, this.currentBattle.player.energy + 2);
       this.currentBattle.opponent.energy = Math.min(5, this.currentBattle.opponent.energy + 2);
       
-      // Set turn back to player
-      this.currentBattle.currentTurn = 'player';
-      this.currentBattle.turn++;
-      
-      console.log('AI attack complete, turn:', this.currentBattle.turn);
+      // Add a small delay before changing turn back to player
+      // This allows the battle log watcher to detect it's still opponent's turn
+      setTimeout(() => {
+        if (this.currentBattle) {
+          this.currentBattle.currentTurn = 'player';
+          this.currentBattle.turn++;
+          console.log('AI attack complete, turn back to player:', this.currentBattle.turn);
+        }
+      }, 100);
     },
 
     executeAttack(attacker, skill) {
@@ -1143,6 +1260,17 @@ export const useCardBattleStore = defineStore('cardBattle', {
 
     switchPokemon(side, pokemon) {
       const battle = this.currentBattle[side];
+      console.log(`=== SWITCHING POKEMON ===`);
+      console.log('Side:', side);
+      console.log('Pokemon to switch to:', pokemon.name, 'ID:', pokemon.id, 'pokemonId:', pokemon.pokemonId, 'UID:', pokemon.uid);
+      console.log('Current active:', battle.activePokemon.name, 'ID:', battle.activePokemon.id, 'pokemonId:', battle.activePokemon.pokemonId);
+      console.log('Bench before switch:', battle.bench.map(p => ({ 
+        name: p.name, 
+        id: p.id,
+        pokemonId: p.pokemonId, 
+        uid: p.uid 
+      })));
+      
       const index = battle.bench.findIndex(p => p.uid === pokemon.uid);
 
       if (index !== -1) {
@@ -1157,8 +1285,12 @@ export const useCardBattleStore = defineStore('cardBattle', {
           battle.bench.splice(index, 1);
         }
 
-        console.log('Manual switch - Active Pokemon:', battle.activePokemon.name, 'Skills:', battle.activePokemon.skills);
-        console.log('Manual switch - Benched Pokemon:', temp.name, 'Skills:', temp.skills);
+        console.log('After switch - Active Pokemon:', battle.activePokemon.name, 'ID:', battle.activePokemon.id, 'pokemonId:', battle.activePokemon.pokemonId);
+        console.log('After switch - Bench:', battle.bench.map(p => ({ 
+          name: p.name, 
+          id: p.id,
+          pokemonId: p.pokemonId 
+        })));
 
         this.addBattleLog(
           `${side === 'player' ? 'You' : 'Opponent'} switched to ${battle.activePokemon.name}!`
@@ -1169,20 +1301,18 @@ export const useCardBattleStore = defineStore('cardBattle', {
           this.currentBattle.requiresSwitch = false;
           this.currentBattle.switchingSide = null;
           
-          // For forced switches due to fainting, immediately trigger opponent's turn
+          // For forced switches due to fainting, we need to handle turn order differently
           if (side === 'player') {
-            this.currentBattle.currentTurn = 'opponent';
-            // Trigger AI turn after a short delay
-            setTimeout(() => {
-              if (this.currentBattle && !this.currentBattle.ended) {
-                this.aiCounterAttack();
-              }
-            }, 1000);
+            // Don't trigger AI turn here - it will be handled by the normal flow
+            console.log('Forced switch completed, resuming battle');
+            // Keep turn as player so they can act with their new Pokemon
+            this.currentBattle.currentTurn = 'player';
           }
         } else {
           // This was a voluntary switch - it counts as the player's turn
-          // The AI turn will be triggered by executePlayerAction
-          console.log('Voluntary switch completed');
+          console.log('Voluntary switch completed - counts as player turn');
+          // Mark that this was a voluntary switch so we know to trigger AI turn
+          this.currentBattle.lastActionWasSwitch = true;
         }
       }
     },

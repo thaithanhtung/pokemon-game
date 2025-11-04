@@ -426,8 +426,10 @@ export const usePlayerStore = defineStore('player', {
     },
 
     addCardToCollection(cardId) {
+      console.log(`Adding card ${cardId} to collection...`);
       const card = this.getCardById(cardId);
       if (card) {
+        console.log(`Found card: ${card.name} (${card.type})`);
         // Deep copy the card to ensure all properties including skills are copied
         const newCard = {
           ...card,
@@ -465,6 +467,10 @@ export const usePlayerStore = defineStore('player', {
         }
         
         this.player.cards.push(newCard);
+        console.log(`Card ${newCard.name} added with UID: ${newCard.uid}`);
+        console.log(`Player now has ${this.player.cards.length} cards`);
+      } else {
+        console.error(`Card ${cardId} not found in database!`);
       }
     },
 
@@ -606,7 +612,8 @@ export const usePlayerStore = defineStore('player', {
     addCardToDeck(deckId, card) {
       const deck = this.player.decks.find(d => d.id === deckId);
       if (deck && deck.cards.length < 30) {
-        deck.cards.push(card);
+        // Store only the UID, not the full card object
+        deck.cards.push(card.uid);
 
         // Save to Firebase
         this.updateUserData({ decks: this.player.decks });
@@ -616,7 +623,8 @@ export const usePlayerStore = defineStore('player', {
     removeCardFromDeck(deckId, cardUid) {
       const deck = this.player.decks.find(d => d.id === deckId);
       if (deck) {
-        const index = deck.cards.findIndex(c => c.uid === cardUid);
+        // Since we now store UIDs, find the index by comparing UIDs directly
+        const index = deck.cards.findIndex(uid => uid === cardUid);
         if (index >= 0) {
           deck.cards.splice(index, 1);
 
@@ -624,6 +632,56 @@ export const usePlayerStore = defineStore('player', {
           this.updateUserData({ decks: this.player.decks });
         }
       }
+    },
+
+    // Migration function to fix existing decks with mixed format
+    migrateDeckFormat() {
+      console.log('=== CHECKING DECK FORMAT ===');
+      if (!this.player?.decks || this.player.decks.length === 0) {
+        console.log('No decks to migrate');
+        return;
+      }
+      
+      let needsMigration = false;
+      
+      // First check if migration is needed
+      this.player.decks.forEach(deck => {
+        if (deck.cards.some(card => typeof card === 'object')) {
+          needsMigration = true;
+        }
+      });
+      
+      if (!needsMigration) {
+        console.log('All decks already in correct format (UIDs only)');
+        return;
+      }
+      
+      console.log('=== MIGRATING DECK FORMAT ===');
+      this.player.decks.forEach(deck => {
+        console.log(`Checking deck: ${deck.name} (${deck.id})`);
+        console.log('Current cards:', deck.cards);
+        
+        // Convert any card objects to UIDs
+        deck.cards = deck.cards.map(card => {
+          if (typeof card === 'string') {
+            // Already a UID
+            return card;
+          } else if (card && typeof card === 'object' && card.uid) {
+            // It's a card object, extract the UID
+            console.log(`Converting card object to UID: ${card.name} -> ${card.uid}`);
+            return card.uid;
+          } else {
+            console.warn('Invalid card in deck:', card);
+            return null;
+          }
+        }).filter(Boolean); // Remove any null entries
+        
+        console.log('Migrated cards:', deck.cards);
+      });
+      
+      console.log('Migration complete, saving to Firebase...');
+      // Save the migrated decks
+      this.updateUserData({ decks: this.player.decks });
     },
 
     // ---------------- Card Database (moved from battle to player) ----------------
